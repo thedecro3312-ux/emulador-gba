@@ -108,10 +108,21 @@
       }
       .screen-idle p { margin: 0; font-size: 14px; max-width: 420px; }
       .btn {
+        display: inline-block; text-align: center;
         border: 0; border-radius: 999px; padding: 10px 18px;
         font-weight: 600; font-size: 14px;
         background: var(--accent); color: var(--accent-ink);
         box-shadow: 0 3px 0 rgba(0,0,0,.25);
+      }
+      label.btn { cursor: pointer; user-select: none; -webkit-user-select: none; }
+      /* El input de archivo NO va con display:none ni con el atributo
+         hidden: los navegadores móviles ignoran en silencio el click()
+         programático sobre un input no renderizado y el selector nunca
+         se abre. Renderizado pero invisible, la activación nativa de
+         los <label for="rom-file"> sí lo abre en Android y escritorio. */
+      .file-offscreen {
+        position: absolute; width: 1px; height: 1px;
+        opacity: 0; pointer-events: none; overflow: hidden;
       }
       .btn:active { transform: translateY(2px); box-shadow: none; }
       .btn.primary { background: var(--shell); color: #fff; }
@@ -279,7 +290,7 @@
             <div class="screen-idle" id="screen-idle">
               <p class="idle-title">Pantalla lista</p>
               <p>Carga un juego en formato .gba desde tu dispositivo y quedará guardado en tu biblioteca de este navegador.</p>
-              <button class="btn" id="idle-load-btn" type="button">Cargar ROM</button>
+              <label class="btn" id="idle-load-btn" for="rom-file">Cargar ROM</label>
             </div>
             <div class="screen-overlay" id="screen-loading" hidden>
               <div class="spinner" aria-hidden="true"></div>
@@ -315,7 +326,7 @@
           <h2>Mi biblioteca</h2>
           <p class="note">Este emulador no incluye ningún juego. Carga tus propios archivos .gba: se guardan en este navegador (IndexedDB) y quedan en tu lista para la próxima visita, solo en este dispositivo.</p>
           <div class="lib-actions">
-            <button class="btn primary" id="load-rom-btn" type="button">Cargar ROM</button>
+            <label class="btn primary" id="load-rom-btn" for="rom-file">Cargar ROM</label>
           </div>
           <div class="empty-box" id="lib-empty">
             Tu biblioteca está vacía.<br />Toca «Cargar ROM» y elige un archivo .gba para agregarlo.
@@ -379,7 +390,7 @@
       </section>
     </main>
 
-    <input type="file" id="rom-file" accept=".gba" hidden />
+    <input type="file" id="rom-file" class="file-offscreen" accept=".gba" aria-label="Elegir un archivo .gba" />
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script>
@@ -863,10 +874,11 @@
       catch (e) { try { target.focus(); } catch (e2) {} }
     }
     document.addEventListener("click", function (ev) {
-      var btn = (ev.target && typeof ev.target.closest === "function") ? ev.target.closest("button") : null;
+      var btn = (ev.target && typeof ev.target.closest === "function") ? ev.target.closest("button, label") : null;
       if (!btn) return;
-      // Los botones que abren el selector de archivos o recargan la
-      // página no necesitan (ni deben) recibir este cambio de foco.
+      // Los botones/etiquetas que abren el selector de archivos o
+      // recargan la página no necesitan (ni deben) recibir este cambio
+      // de foco.
       if (btn.id === "load-rom-btn" || btn.id === "idle-load-btn" || btn.id === "load-retry-btn") return;
       // Los botones internos del reproductor de EmulatorJS (ajustes,
       // volumen…) gestionan su propio foco y sus menús: no tocarlos.
@@ -985,8 +997,15 @@
       addRomFile(this.files && this.files[0]);
       this.value = "";
     });
-    $("load-rom-btn").addEventListener("click", function () { $("rom-file").click(); });
-    $("idle-load-btn").addEventListener("click", function () { $("rom-file").click(); });
+    // Los dos «Cargar ROM» son <label for="rom-file">: el navegador abre
+    // el selector de forma NATIVA al tocarlos, sin depender de un click()
+    // por JS sobre un input oculto (patrón que Android — WebView y Chrome
+    // móvil — ignora en silencio). Aquí solo se muestra un toast inmediato
+    // al tocar, para que si el selector no se abriera, el fallo al menos
+    // sea visible y no parezca que el botón no hace nada.
+    function romPickerToast() { toast("Elige un archivo .gba…"); }
+    $("load-rom-btn").addEventListener("click", romPickerToast);
+    $("idle-load-btn").addEventListener("click", romPickerToast);
 
     /* ============================================================
        MULTIJUGADOR — PeerJS vendorizado, salas con código de 4 letras.
