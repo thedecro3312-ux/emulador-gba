@@ -625,6 +625,15 @@
     window.addEventListener("error", function (ev) {
       if (emuStarted && !loadSettled && ev && ev.message) lastLoadError = String(ev.message);
     });
+    // El arranque de EmulatorJS vive en una promesa (loader.js): si su
+    // constructor falla, el error llega como rechazo sin capturar, no
+    // como evento «error». Se anota igual para que el diagnóstico de la
+    // pantalla de error diga la causa real y no un atasco genérico.
+    window.addEventListener("unhandledrejection", function (ev) {
+      if (emuStarted && !loadSettled && ev && ev.reason) {
+        lastLoadError = String(ev.reason.message || ev.reason);
+      }
+    });
 
     function setLoadStatus(txt) {
       var el = $("load-status");
@@ -744,7 +753,18 @@
       window.EJS_color = "#574fc0";
       window.EJS_backgroundColor = "#050408";
       window.EJS_startOnLoaded = true;
+      // Sin hilos: el núcleo con hilos exige aislamiento cross-origin
+      // (COOP/COEP + SharedArrayBuffer), que el alojamiento público no
+      // ofrece; el núcleo clásico (legacy) es el que debe arrancar.
+      window.EJS_threads = false;
       // Mapeo pedido: flechas=cruceta, X=A, Z=B, Enter=Start, Shift=Select, A/S=L/R.
+      // OJO: EJS_defaultControls REEMPLAZA por completo los controles
+      // internos de EmulatorJS, y su setupKeys() recorre los jugadores
+      // 0–3. Si faltan los jugadores 1–3, el constructor lanza
+      // «Cannot read properties of undefined (reading '0')», EJS_emulator
+      // nunca se crea y el juego se queda en «Cargando el núcleo mGBA…»
+      // hasta que salta el vigilante. Por eso van los tres vacíos, igual
+      // que en los valores internos de la librería.
       window.EJS_defaultControls = {
         0: {
           8:  { value: "x",          value2: "BUTTON_1" },
@@ -757,7 +777,10 @@
           5:  { value: "down arrow", value2: "DPAD_DOWN" },
           6:  { value: "left arrow", value2: "DPAD_LEFT" },
           7:  { value: "right arrow", value2: "DPAD_RIGHT" }
-        }
+        },
+        1: {},
+        2: {},
+        3: {}
       };
       // La barra inferior del reproductor duplica estos botones: se dejan
       // solo los ajustes (reasignar teclas / mando) y el volumen.
