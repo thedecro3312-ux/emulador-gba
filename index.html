@@ -842,6 +842,41 @@
       return (window.EJS_emulator && window.EJS_emulator.gameManager) ? window.EJS_emulator : null;
     }
 
+    /* ---------- Devolver el foco al juego tras pulsar un botón ----------
+       Al hacer clic en Guardar, Reiniciar o cualquier otro botón de la
+       página, el botón se queda con el foco del teclado y las teclas
+       dejan de llegar al juego hasta hacer clic de nuevo en la pantalla
+       (y Space/Enter podían incluso reactivar el botón). Tras cada clic
+       en un botón propio (fuera del reproductor de EmulatorJS) mientras
+       hay una partida en marcha, se quita el foco del botón y se enfoca
+       el canvas del juego — o su contenedor si el canvas aún no existe —
+       para que el teclado siga funcionando sin clic extra. */
+    function refocusGame() {
+      var active = document.activeElement;
+      if (active && active !== document.body && typeof active.blur === "function") {
+        try { active.blur(); } catch (e) {}
+      }
+      var target = $("game").querySelector("canvas") || $("game");
+      if (!target) return;
+      if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+      try { target.focus({ preventScroll: true }); }
+      catch (e) { try { target.focus(); } catch (e2) {} }
+    }
+    document.addEventListener("click", function (ev) {
+      var btn = (ev.target && typeof ev.target.closest === "function") ? ev.target.closest("button") : null;
+      if (!btn) return;
+      // Los botones que abren el selector de archivos o recargan la
+      // página no necesitan (ni deben) recibir este cambio de foco.
+      if (btn.id === "load-rom-btn" || btn.id === "idle-load-btn" || btn.id === "load-retry-btn") return;
+      // Los botones internos del reproductor de EmulatorJS (ajustes,
+      // volumen…) gestionan su propio foco y sus menús: no tocarlos.
+      if ($("game").contains(btn)) return;
+      if (!emuRunning) return;
+      // Diferido: primero se ejecuta el manejador propio del botón
+      // (guardar, reiniciar, pausar…) y después se devuelve el foco.
+      setTimeout(refocusGame, 0);
+    });
+
     /* ---------- Botones de transporte ---------- */
     $("btn-pause").addEventListener("click", function () {
       var e = emu(); if (!e) return;
