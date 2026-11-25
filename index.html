@@ -40,7 +40,7 @@
         }
       }
       * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; }
+      html, body { margin: 0; padding: 0; overflow-x: hidden; max-width: 100%; }
       body {
         background: var(--page-bg);
         color: var(--panel-ink);
@@ -49,7 +49,20 @@
       }
       button, input, select { font: inherit; }
       button { min-height: 40px; cursor: pointer; }
-      .wrap { max-width: 1060px; margin: 0 auto; padding: 18px 14px 40px; }
+      .wrap { max-width: 1060px; margin: 0 auto; padding: 62px 14px 40px; width: 100%; }
+
+      /* Botón fijo de vuelta a la Sala de Juegos: siempre visible,
+         por encima de todo (también del reproductor a pantalla completa
+         dentro de la página), en la esquina superior izquierda. */
+      .back-sala {
+        position: fixed; top: 10px; left: 10px; z-index: 200;
+        display: inline-flex; align-items: center; min-height: 40px;
+        background: var(--shell); color: #fff; text-decoration: none;
+        font-weight: 700; font-size: 14px; padding: 8px 16px;
+        border-radius: 999px; border: 1px solid rgba(255,255,255,.35);
+        box-shadow: 0 6px 18px rgba(20, 12, 60, .35);
+      }
+      .back-sala:active { transform: translateY(1px); }
 
       /* ---------- Consola ---------- */
       .console {
@@ -76,7 +89,7 @@
       }
       .brand strong { color: var(--accent); }
       .now-playing {
-        margin-left: auto; font-size: 13px; color: #cfc9f5;
+        margin-left: auto; font-size: 13px; color: #cfc9f5; min-width: 0;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .screen-bezel {
@@ -96,9 +109,20 @@
       .screen-idle {
         position: absolute; inset: 0; z-index: 4;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 8px; text-align: center; padding: 20px;
+        gap: 8px; text-align: center; padding: 20px; overflow-y: auto;
         background: radial-gradient(ellipse at 50% 40%, #1c1830 0%, #07060d 70%);
         color: #b9b2e8;
+      }
+      /* En pantallas estrechas la pantalla 3:2 queda baja y el contenido
+         inicial (título + aviso + texto + botón) no cabe: se compacta y,
+         si aún falta sitio, se desplaza dentro de la propia pantalla
+         para que el botón «Cargar ROM» siempre se alcance entero. */
+      @media (max-width: 560px) {
+        .screen-idle { padding: 12px 14px; gap: 5px; justify-content: flex-start; }
+        .screen-idle .idle-title { font-size: 19px; }
+        .screen-idle p { font-size: 12.5px; }
+        .idle-warning { font-size: 12px !important; padding: 6px 9px; }
+        .screen-idle .btn { margin-top: 4px; }
       }
       .screen-idle[hidden] { display: none; }
       .idle-title {
@@ -176,6 +200,8 @@
         display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
         margin-top: 14px;
       }
+      .grid > * { min-width: 0; }
+      .console, .panel, .screen, .screen-bezel { max-width: 100%; }
       @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
       .panel {
         background: var(--panel); border: 1px solid var(--line);
@@ -262,6 +288,35 @@
         display: inline-block; min-height: 26px; line-height: 20px;
       }
 
+      /* Aviso en la pantalla inicial: sin .gba propio no se juega */
+      .idle-warning {
+        border: 1.5px solid var(--accent); border-radius: 10px;
+        background: rgba(255, 179, 64, .14); color: #ffe1a8;
+        padding: 9px 12px; font-size: 13.5px !important; font-weight: 600;
+      }
+
+      /* Flujo de sala: copiar código / empezar / salir */
+      .room-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 10px; }
+      .room-actions .btn[hidden] { display: none; }
+
+      /* Confirmación al salir de la sala en mitad de una partida
+         (los diálogos del navegador no funcionan en este marco) */
+      .modal-backdrop {
+        position: fixed; inset: 0; z-index: 120;
+        background: rgba(10, 8, 24, .62);
+        display: flex; align-items: center; justify-content: center; padding: 18px;
+      }
+      .modal-backdrop[hidden] { display: none; }
+      .modal-card {
+        background: var(--panel); color: var(--panel-ink);
+        border: 1px solid var(--line); border-radius: 16px;
+        padding: 20px; max-width: 420px; width: 100%;
+        box-shadow: var(--shadow);
+      }
+      .modal-card h3 { margin: 0 0 8px; font-size: 17px; }
+      .modal-card p { margin: 0 0 14px; color: var(--panel-soft); font-size: 14px; }
+      .modal-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+
       .toast {
         position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px);
         background: #221d3d; color: #f4f2ff; padding: 11px 18px; border-radius: 999px;
@@ -275,6 +330,7 @@
     </style>
   </head>
   <body>
+    <a class="back-sala" href="https://thedecro3312-ux.github.io/sala-de-juegos/">← Sala de Juegos</a>
     <main class="wrap">
 
       <!-- ================= CONSOLA ================= -->
@@ -289,6 +345,7 @@
             <div id="game"></div>
             <div class="screen-idle" id="screen-idle">
               <p class="idle-title">Pantalla lista</p>
+              <p class="idle-warning">Sin un archivo .gba propio no puedes jugar: este emulador no incluye ningún juego (no hay ROM incluido).</p>
               <p>Carga un juego en formato .gba desde tu dispositivo y quedará guardado en tu biblioteca de este navegador.</p>
               <label class="btn" id="idle-load-btn" for="rom-file">Cargar ROM</label>
             </div>
@@ -339,20 +396,23 @@
           <h2>Multijugador · Cable link</h2>
           <p class="note">Crea una sala con un código de 4 letras o únete a la de tu amigo. Al conectarse, la sala <strong>comprueba que los dos tengan cargado exactamente el mismo juego</strong> (mismo hash del ROM) y muestra si están esperando jugador, conectados o si el otro se desconectó.</p>
           <p class="note">Multijugador por cable link: las salas conectan a los dos jugadores y verifican que tengan el mismo ROM, pero el juego en sí todavía no se sincroniza. El cable link necesita el núcleo mGBA Dual y un servidor netplay: el núcleo actual no expone el puerto serie (SIO) y el servidor público de EmulatorJS no está disponible ahora mismo. Por ahora, cada quien juega su propia partida.</p>
+          <p class="note" id="mp-netplay-server" hidden>Servidor netplay: <span id="mp-netplay-server-url"></span></p>
           <div class="mp-status"><span class="dot" id="mp-dot"></span><span id="mp-status-text">Sin conexión</span></div>
+          <div class="room-actions">
+            <button class="btn ghost small" id="mp-copy" type="button" hidden>Copiar código</button>
+            <button class="btn primary small" id="mp-start" type="button" hidden>Empezar</button>
+            <button class="btn danger small" id="mp-disconnect" type="button" hidden>Salir de la sala</button>
+          </div>
 
           <h3>Crear una sala</h3>
           <button class="btn primary" id="mp-create" type="button">Crear sala</button>
           <div class="room-code" id="mp-code" hidden>····</div>
-          <p class="note" id="mp-code-hint" hidden>Comparte este código con tu amigo para que se una.</p>
+          <p class="note" id="mp-code-hint" hidden>Comparte este código con tu amigo para que se una. Si nadie entra en 10 minutos, la sala se cierra sola.</p>
 
           <h3>Unirse a una sala</h3>
           <div class="join-row">
             <input id="mp-join-input" type="text" maxlength="4" placeholder="CÓDIGO" autocomplete="off" autocapitalize="characters" aria-label="Código de sala de 4 letras" />
             <button class="btn primary" id="mp-join" type="button">Unirse</button>
-          </div>
-          <div class="join-row">
-            <button class="btn ghost" id="mp-disconnect" type="button" hidden>Desconectar</button>
           </div>
           <ul class="mp-log" id="mp-log"></ul>
           <p class="note">Las salas son para <strong>2 jugadores</strong>. Si tu amigo se desconecta, tu partida local sigue corriendo.</p>
@@ -391,6 +451,16 @@
     </main>
 
     <input type="file" id="rom-file" class="file-offscreen" accept=".gba" aria-label="Elegir un archivo .gba" />
+    <div class="modal-backdrop" id="leave-modal" hidden>
+      <div class="modal-card" role="alertdialog" aria-labelledby="leave-modal-title" aria-describedby="leave-modal-text">
+        <h3 id="leave-modal-title">¿Salir de la sala?</h3>
+        <p id="leave-modal-text">Estás en mitad de una partida y conectado con el otro jugador. Si sales, la sala se cierra para ti (tu partida local seguirá corriendo).</p>
+        <div class="modal-actions">
+          <button class="btn ghost" id="leave-cancel" type="button">Cancelar</button>
+          <button class="btn danger" id="leave-confirm" type="button">Salir de la sala</button>
+        </div>
+      </div>
+    </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script>
@@ -403,6 +473,21 @@
        ============================================================ */
     var EJS_DATA = "assets/ejs/";
     var PEER_PREFIX = "emulador-gba-publico-";
+
+    /* ---------- Servidor netplay propio por URL (?netplay=<url>) ----------
+       Si el enlace trae ?netplay=<url> (p. ej. el túnel de Cloudflare del
+       PC que hace de servidor), ese servidor sustituye al valor por
+       defecto de EmulatorJS. Se valida: vacío o sin http:// / https://
+       se ignora y la página se comporta exactamente como siempre. */
+    var customNetplayServer = null;
+    (function () {
+      var raw = new URLSearchParams(window.location.search).get("netplay");
+      if (raw === null) return;
+      var val = raw.trim();
+      if (!val) return;
+      if (val.indexOf("http://") !== 0 && val.indexOf("https://") !== 0) return;
+      customNetplayServer = val;
+    })();
 
     /* ---------- Utilidades ---------- */
     function $(id) { return document.getElementById(id); }
@@ -760,6 +845,9 @@
       window.EJS_gameName = rom.name;
       window.EJS_gameID = parseInt(rom.hash.slice(0, 7), 16) || 1;
       window.EJS_pathtodata = EJS_DATA;
+      // Servidor netplay propio si vino por ?netplay=<url>; sin parámetro
+      // no se toca y EmulatorJS usa su valor por defecto.
+      if (customNetplayServer) window.EJS_netplayServer = customNetplayServer;
       window.EJS_language = "es-ES";
       window.EJS_color = "#574fc0";
       window.EJS_backgroundColor = "#050408";
@@ -1017,6 +1105,20 @@
        ============================================================ */
     var peer = null, conn = null, mpRole = null, mpCode = null;
     var mpVerified = false, mpLastSeen = 0, mpHeartbeat = null;
+    // Vida de la sala: mientras mpWantRoom sea true, la sala debe seguir
+    // viva (anfitrión esperando o jugadores conectados). Un vigilante
+    // revisa la señal con el servidor de salas y una reconexión con
+    // reintentos la recupera si se cae; antes, un solo error transitorio
+    // de red destruía el Peer y la sala moría sola a los pocos segundos.
+    var mpWantRoom = false, mpWatchdog = null;
+    var mpReconnectTimer = null, mpReconnectCheck = null, mpReconnectAttempts = 0;
+    var mpPeerOpened = false;
+    // Caducidad de la sala: si el anfitrión espera y nadie se une en
+    // 10 minutos, la sala se cierra sola con el aviso «la sala expiró»
+    // en vez de quedarse abierta (y registrada en el servidor de salas)
+    // para siempre.
+    var MP_ROOM_TTL_MS = 10 * 60 * 1000;
+    var mpExpiryTimer = null;
 
     function mpLog(msg) {
       var li = document.createElement("li");
@@ -1037,25 +1139,137 @@
       return code;
     }
     function mpCleanup(keepStatus) {
+      mpWantRoom = false;
+      mpStopWatchdog();
+      mpClearReconnect();
+      mpClearExpiry();
       if (mpHeartbeat) { clearInterval(mpHeartbeat); mpHeartbeat = null; }
       if (conn) { try { conn.close(); } catch (e) {} conn = null; }
       if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
-      mpRole = null; mpVerified = false;
+      mpRole = null; mpVerified = false; mpPeerOpened = false;
       $("mp-disconnect").hidden = true;
+      $("mp-copy").hidden = true;
+      $("mp-start").hidden = true;
+      $("leave-modal").hidden = true;
       $("mp-create").disabled = false;
       $("mp-join").disabled = false;
       if (!keepStatus) mpStatus("Sin conexión", "");
     }
+    /* ---------- Caducidad de salas sin jugadores ----------
+       El temporizador corre solo mientras el anfitrión está esperando
+       sin ningún jugador conectado: se arma al crear la sala (y de
+       nuevo si el invitado se va y la sala vuelve a quedar en espera),
+       y se cancela en cuanto alguien se conecta. */
+    function mpClearExpiry() {
+      if (mpExpiryTimer) { clearTimeout(mpExpiryTimer); mpExpiryTimer = null; }
+    }
+    function mpArmExpiry() {
+      mpClearExpiry();
+      if (mpRole !== "host") return;
+      mpExpiryTimer = setTimeout(function () {
+        mpExpiryTimer = null;
+        if (!mpWantRoom || mpRole !== "host") return;
+        if (conn && conn.open) return; // hay jugador: la sala no caduca
+        mpCleanup(true);
+        $("mp-code").hidden = true;
+        $("mp-code-hint").hidden = true;
+        mpStatus("La sala expiró", "bad");
+        mpLog("La sala expiró: nadie se unió en 10 minutos y se cerró sola. Crea una sala nueva cuando quieras.");
+        toast("La sala expiró: nadie se unió en 10 minutos.");
+      }, MP_ROOM_TTL_MS);
+    }
+    // Al cerrar o abandonar la página, el peer se destruye para que la
+    // sala no quede registrada como viva en el servidor de salas.
+    function mpDestroyPeerOnLeave() {
+      if (conn) { try { conn.close(); } catch (e) {} }
+      if (peer) { try { peer.destroy(); } catch (e) {} }
+    }
+    window.addEventListener("pagehide", mpDestroyPeerOnLeave);
+    window.addEventListener("beforeunload", mpDestroyPeerOnLeave);
+    /* ---------- Sala viva: vigilante y reconexión con reintentos ----------
+       El socket de señalización de PeerJS puede caerse por un bache de
+       red, por estrangulamiento de temporizadores con la pestaña en
+       segundo plano o porque el servidor de salas cierra la conexión.
+       Eso NO debe matar la sala: PeerJS emite «disconnected» (y un error
+       «network») y el Peer conserva su código para reconectar con el
+       mismo ID. Antes el manejador de errores destruía el Peer ante
+       cualquier error y la única reconexión era de un solo intento, así
+       que la sala se perdía sola a los pocos segundos de crearla. */
+    function mpClearReconnect() {
+      if (mpReconnectTimer) { clearTimeout(mpReconnectTimer); mpReconnectTimer = null; }
+      if (mpReconnectCheck) { clearTimeout(mpReconnectCheck); mpReconnectCheck = null; }
+      mpReconnectAttempts = 0;
+    }
+    function mpStopWatchdog() {
+      if (mpWatchdog) { clearInterval(mpWatchdog); mpWatchdog = null; }
+    }
+    function mpStartWatchdog() {
+      mpStopWatchdog();
+      mpWatchdog = setInterval(function () {
+        if (!mpWantRoom) { mpStopWatchdog(); return; }
+        if (!peer || peer.destroyed) { mpStopWatchdog(); return; }
+        if (peer.disconnected) mpScheduleReconnect();
+      }, 5000);
+    }
+    function mpScheduleReconnect() {
+      if (!mpWantRoom || mpReconnectTimer) return;
+      if (!peer || peer.destroyed || !peer.disconnected) return;
+      var delay = Math.min(15000, 1000 * Math.pow(2, mpReconnectAttempts));
+      mpReconnectAttempts++;
+      mpReconnectTimer = setTimeout(function () {
+        mpReconnectTimer = null;
+        if (!mpWantRoom || !peer || peer.destroyed) return;
+        if (!peer.disconnected) return;
+        try { peer.reconnect(); } catch (e) { mpScheduleReconnect(); return; }
+        // Si este intento no recupera la señal, el vigilante y este
+        // chequeo programan el siguiente con una espera mayor.
+        mpReconnectCheck = setTimeout(function () {
+          mpReconnectCheck = null;
+          if (mpWantRoom && peer && !peer.destroyed && peer.disconnected) mpScheduleReconnect();
+        }, 8000);
+      }, delay);
+    }
+    function mpOnPeerDisconnected() {
+      if (!mpWantRoom) return;
+      mpLog("Se perdió la señal con el servidor de salas; reconectando… (la sala sigue abierta)");
+      if (!conn) mpStatus("Reconectando…", "wait");
+      mpScheduleReconnect();
+    }
+    function mpOnPeerOpen() {
+      var reconnected = mpPeerOpened;
+      mpPeerOpened = true;
+      if (mpReconnectTimer) { clearTimeout(mpReconnectTimer); mpReconnectTimer = null; }
+      if (mpReconnectCheck) { clearTimeout(mpReconnectCheck); mpReconnectCheck = null; }
+      mpReconnectAttempts = 0;
+      if (reconnected) mpLog("Señal recuperada: la sala sigue viva con el mismo código.");
+    }
+    // Errores transitorios del socket de señalización: se reconecta, no
+    // se destruye la sala. Devuelve true si el error ya quedó manejado.
+    // (PeerJS emite este error justo antes que «disconnected»; ese
+    // evento es el que registra el aviso y programa la reconexión, y el
+    // vigilante cubre cualquier caso en que el evento no llegue.)
+    function mpHandleTransientPeerError(err) {
+      if (err.type === "network" || err.type === "socket-error" ||
+          err.type === "socket-closed" || err.type === "disconnected") {
+        mpScheduleReconnect();
+        return true;
+      }
+      return false;
+    }
     function mpDisconnected() {
       if (mpHeartbeat) { clearInterval(mpHeartbeat); mpHeartbeat = null; }
       conn = null; mpVerified = false;
+      $("mp-start").hidden = true;
       mpStatus("Jugador desconectado", "bad");
       mpLog("El otro jugador se desconectó. Tu partida local sigue corriendo.");
       toast("Jugador desconectado. Tu juego sigue en local.");
       if (mpRole === "guest") {
         $("mp-disconnect").hidden = false;
       }
-      // El anfitrión conserva su sala abierta para que el amigo vuelva a entrar.
+      // El anfitrión conserva su sala abierta para que el amigo vuelva a
+      // entrar, pero vuelve a correr la caducidad de 10 minutos: si
+      // nadie entra, la sala expirará sola.
+      if (mpRole === "host") mpArmExpiry();
     }
     function mpSend(obj) {
       if (conn && conn.open) { try { conn.send(obj); } catch (e) {} }
@@ -1066,9 +1280,21 @@
       mpHeartbeat = setInterval(function () {
         if (!conn) { clearInterval(mpHeartbeat); mpHeartbeat = null; return; }
         mpSend({ t: "ping" });
-        if (Date.now() - mpLastSeen > 12000) mpDisconnected();
-      }, 4000);
+        // Antes el límite era 12 s con chequeos cada 4 s: el primer
+        // chequeo que lo superaba caía a los ~14-16 s y declaraba la
+        // desconexión aunque el canal WebRTC siguiera abierto, con lo
+        // que la sala se caía sola en cuanto unos pocos pings se
+        // retrasaban (pestaña en segundo plano, emulador ocupando el
+        // hilo principal…). Ahora se exigen 45 s de silencio real.
+        if (Date.now() - mpLastSeen > 45000) mpDisconnected();
+      }, 5000);
     }
+    // Al volver la pestaña a primer plano, los temporizadores pudieron
+    // estar estrangulados sin que el otro jugador se fuera: se concede
+    // una ventana completa de latido antes de juzgar la conexión.
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && conn) mpLastSeen = Date.now();
+    });
     function mpOnData(data) {
       if (!data || typeof data !== "object") return;
       mpLastSeen = Date.now();
@@ -1106,7 +1332,10 @@
     function mpWireConnection(c) {
       conn = c;
       c.on("open", function () {
+        // Ya hay jugador en la sala: la caducidad deja de correr.
+        mpClearExpiry();
         mpStatus("Conectado", "wait");
+        $("mp-start").hidden = false;
         mpLog("Conexión establecida. Verificando que ambos tengan el mismo juego…");
         mpSend({
           t: "hola",
@@ -1132,17 +1361,27 @@
     $("mp-create").addEventListener("click", function () {
       if (!mpPeerAvailable()) return;
       mpCleanup();
+      mpWantRoom = true;
       mpRole = "host";
       mpCode = makeCode();
       peer = new Peer(PEER_PREFIX + mpCode);
       peer.on("open", function () {
+        var reconnected = mpPeerOpened;
+        mpOnPeerOpen();
         $("mp-code").hidden = false;
         $("mp-code").textContent = mpCode;
         $("mp-code-hint").hidden = false;
+        $("mp-copy").hidden = false;
         $("mp-disconnect").hidden = false;
         $("mp-create").disabled = true;
-        mpStatus("Esperando jugador…", "wait");
-        mpLog("Sala creada con el código " + mpCode + ". Esperando a que tu amigo se una…");
+        if (conn && conn.open) {
+          mpStatus("Conectado", mpVerified ? "ok" : "wait");
+        } else {
+          mpStatus("Esperando jugador…", "wait");
+          // La sala caduca sola si nadie se une en 10 minutos.
+          mpArmExpiry();
+          if (!reconnected) mpLog("Sala creada con el código " + mpCode + ". Esperando a que tu amigo se una… (la sala se cierra sola si nadie entra en 10 minutos)");
+        }
       });
       peer.on("connection", function (c) {
         if (conn && conn.open) {
@@ -1152,32 +1391,34 @@
         }
         mpWireConnection(c);
       });
-      peer.on("disconnected", function () {
-        mpLog("Se perdió la señal con el servidor de salas; reconectando…");
-        try { peer.reconnect(); } catch (e) {}
-      });
+      peer.on("disconnected", mpOnPeerDisconnected);
       peer.on("error", function (err) {
         if (err.type === "unavailable-id") {
           mpLog("Ese código de sala ya estaba en uso; generando otro…");
           mpCleanup();
           $("mp-create").click();
+        } else if (mpHandleTransientPeerError(err)) {
+          // Señal caída pero recuperable: la sala sigue viva.
         } else {
           mpStatus("Sin conexión", "bad");
           mpLog("Error de red (" + err.type + "). Inténtalo de nuevo.");
           mpCleanup(true);
         }
       });
+      mpStartWatchdog();
     });
     $("mp-join").addEventListener("click", function () {
       if (!mpPeerAvailable()) return;
       var code = $("mp-join-input").value.trim().toUpperCase().replace(/[^A-Z]/g, "");
       if (code.length !== 4) { toast("Escribe el código de 4 letras de la sala."); return; }
       mpCleanup();
+      mpWantRoom = true;
       mpRole = "guest";
       mpCode = code;
       peer = new Peer();
-      peer.on("open", function () {
+      function mpGuestConnect() {
         mpStatus("Conectando…", "wait");
+        $("mp-disconnect").hidden = false;
         mpLog("Buscando la sala " + code + "…");
         var c = peer.connect(PEER_PREFIX + code, { reliable: true });
         mpWireConnection(c);
@@ -1189,29 +1430,100 @@
             $("mp-join").disabled = false;
           }
         }, 9000);
+      }
+      peer.on("open", function () {
+        mpOnPeerOpen();
+        // Al recuperar la señal tras una caída, si aún no hay conexión
+        // con el anfitrión se vuelve a intentar entrar a la sala. Si la
+        // conexión ya existe, es directa entre navegadores (WebRTC) y
+        // no depende del servidor de salas: no se toca.
+        if (!conn) mpGuestConnect();
       });
+      peer.on("disconnected", mpOnPeerDisconnected);
       peer.on("error", function (err) {
         if (err.type === "peer-unavailable") {
+          mpWantRoom = false;
+          mpStopWatchdog();
+          mpClearReconnect();
           mpStatus("Sin conexión", "bad");
           mpLog("No existe una sala con el código " + code + " (o ya se cerró).");
+          $("mp-join").disabled = false;
+        } else if (mpHandleTransientPeerError(err)) {
+          // Señal caída pero recuperable: se reconecta solo.
         } else {
           mpStatus("Sin conexión", "bad");
           mpLog("Error de red (" + err.type + "). Inténtalo de nuevo.");
+          $("mp-join").disabled = false;
         }
-        $("mp-join").disabled = false;
       });
+      mpStartWatchdog();
     });
-    $("mp-disconnect").addEventListener("click", function () {
+    /* ---------- Flujo de sala: copiar código, empezar, salir ---------- */
+    $("mp-copy").addEventListener("click", function () {
+      if (!mpCode) return;
+      function done() { toast("Código " + mpCode + " copiado."); }
+      function failed() { toast("No se pudo copiar automático. El código es " + mpCode + "."); }
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(mpCode).then(done, function () { mpCopyFallback() ? done() : failed(); });
+      } else if (mpCopyFallback()) { done(); } else { failed(); }
+    });
+    function mpCopyFallback() {
+      // Respaldo para navegadores/marcos sin API de portapapeles.
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = mpCode;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return !!ok;
+      } catch (e) { return false; }
+    }
+    $("mp-start").addEventListener("click", function () {
+      // «Empezar» lleva a cada jugador a su pantalla: la sala ya conectó
+      // y verificó el ROM, pero (aviso honesto) la partida no se
+      // sincroniza con este núcleo; cada quien juega la suya.
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (emuRunning) setTimeout(refocusGame, 350);
+      mpLog("A jugar: cada quien corre su propia partida en su pantalla (la sincronización del cable link aún no funciona con este núcleo).");
+      toast("A jugar. Recuerda: cada quien juega su propia partida; el juego aún no se sincroniza.");
+    });
+    function mpLeaveRoom() {
       mpCleanup();
       $("mp-code").hidden = true;
       $("mp-code-hint").hidden = true;
-      mpLog("Te desconectaste de la sala.");
+      mpLog("Saliste de la sala.");
+    }
+    $("mp-disconnect").addEventListener("click", function () {
+      // Salir en mitad de una partida conectada pide confirmación con
+      // un diálogo propio de la página.
+      if (emuRunning && conn && conn.open) {
+        $("leave-modal").hidden = false;
+        return;
+      }
+      mpLeaveRoom();
+    });
+    $("leave-cancel").addEventListener("click", function () {
+      $("leave-modal").hidden = true;
+    });
+    $("leave-confirm").addEventListener("click", function () {
+      $("leave-modal").hidden = true;
+      mpLeaveRoom();
     });
     $("mp-join-input").addEventListener("input", function () {
       this.value = this.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
     });
 
     /* ---------- Arranque ---------- */
+    // Si vino un servidor netplay propio por ?netplay=<url>, se muestra
+    // cuál está activo en la sección de Multijugador. Sin parámetro, la
+    // línea queda oculta y la sección se ve exactamente como siempre.
+    if (customNetplayServer) {
+      $("mp-netplay-server-url").textContent = customNetplayServer;
+      $("mp-netplay-server").hidden = false;
+    }
     refreshLibrary().then(function () {
       var m = location.hash.match(/play=([0-9a-f-]{8,})/i);
       if (m) {
