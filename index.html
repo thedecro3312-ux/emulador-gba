@@ -92,9 +92,9 @@
         border-radius: 6px;
         overflow: hidden;
       }
-      #game { position: absolute; inset: 0; width: 100%; height: 100%; }
+      #game { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; }
       .screen-idle {
-        position: absolute; inset: 0;
+        position: absolute; inset: 0; z-index: 4;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
         gap: 8px; text-align: center; padding: 20px;
         background: radial-gradient(ellipse at 50% 40%, #1c1830 0%, #07060d 70%);
@@ -120,6 +120,33 @@
       .btn.small { min-height: 36px; padding: 7px 13px; font-size: 13px; }
       .btn[disabled] { opacity: .45; cursor: not-allowed; transform: none; }
       .screen-idle .btn { margin-top: 8px; }
+
+      /* Carga y error de arranque (sobre la pantalla) */
+      .screen-overlay {
+        position: absolute; inset: 0; z-index: 6;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 8px; text-align: center; padding: 20px;
+        background: radial-gradient(ellipse at 50% 40%, #1c1830 0%, #07060d 78%);
+        color: #b9b2e8;
+      }
+      .screen-overlay[hidden] { display: none; }
+      .screen-overlay p { margin: 0; font-size: 14px; max-width: 440px; }
+      .spinner {
+        width: 42px; height: 42px; border-radius: 50%; flex: none;
+        border: 4px solid rgba(255,255,255,.18); border-top-color: var(--accent);
+        animation: spin .9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+      .load-game { font-weight: 700; color: #efeaff; }
+      .load-hint { font-size: 12.5px !important; color: #8f88c4; }
+      .load-detail {
+        font-size: 12.5px !important; background: rgba(0,0,0,.4);
+        border: 1px solid rgba(255,255,255,.14); border-radius: 8px;
+        padding: 8px 10px; word-break: break-word;
+      }
+      .overlay-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
+      .btn.ghost-dark { background: transparent; color: #f2f0ff; border: 1px solid rgba(255,255,255,.4); box-shadow: none; }
 
       .transport {
         display: flex; flex-wrap: wrap; gap: 8px;
@@ -253,6 +280,23 @@
               <p class="idle-title">Pantalla lista</p>
               <p>Carga un juego en formato .gba desde tu dispositivo y quedará guardado en tu biblioteca de este navegador.</p>
               <button class="btn" id="idle-load-btn" type="button">Cargar ROM</button>
+            </div>
+            <div class="screen-overlay" id="screen-loading" hidden>
+              <div class="spinner" aria-hidden="true"></div>
+              <p class="idle-title">Cargando juego…</p>
+              <p class="load-game" id="load-game-name"></p>
+              <p id="load-status" role="status">Preparando el juego…</p>
+              <p class="load-hint" id="load-hint" hidden>Esto está tardando más de lo normal. Si el núcleo se atascó, en unos segundos te muestro qué pasó y cómo reintentar.</p>
+            </div>
+            <div class="screen-overlay" id="screen-error" hidden>
+              <p class="idle-title">El juego no arrancó</p>
+              <p>La pantalla se quedó en negro porque el emulador no terminó de cargar. No es tu archivo: tu juego sigue guardado en la biblioteca.</p>
+              <p class="load-detail" id="load-error-detail"></p>
+              <div class="overlay-actions">
+                <button class="btn" id="load-retry-btn" type="button">Reintentar</button>
+                <button class="btn ghost-dark" id="load-wait-btn" type="button">Seguir esperando</button>
+                <button class="btn ghost-dark" id="load-other-btn" type="button">Elegir otro juego</button>
+              </div>
             </div>
           </div>
         </div>
@@ -497,17 +541,41 @@
         }
       });
     }
+    function readFileBuffer(file) {
+      // Primer intento con arrayBuffer(); si el navegador lo rechaza de
+      // forma intermitente, segundo intento con FileReader tras una
+      // pausa breve (a Ristu la lectura le falló 2 de 3 veces así).
+      var viaReader = function () {
+        return new Promise(function (resolve, reject) {
+          var r = new FileReader();
+          r.onload = function () { resolve(r.result); };
+          r.onerror = function () { reject(r.error || new Error("FileReader")); };
+          r.readAsArrayBuffer(file);
+        });
+      };
+      if (typeof file.arrayBuffer === "function") {
+        return file.arrayBuffer().catch(function () {
+          return new Promise(function (res) { setTimeout(res, 350); }).then(viaReader);
+        });
+      }
+      return viaReader();
+    }
     function addRomFile(file) {
       if (!file) return;
       if (!/\.gba$/i.test(file.name)) {
         toast("Ese archivo no es un .gba. Elige un ROM de Game Boy Advance.");
         return;
       }
-      file.arrayBuffer().then(function (buf) {
+      if (file.size === 0) {
+        toast("Ese archivo está vacío (0 KB). Elige el ROM completo.");
+        return;
+      }
+      toast("Leyendo «" + file.name.replace(/\.gba$/i, "") + "»…");
+      readFileBuffer(file).then(function (buf) {
         var u8 = new Uint8Array(buf);
         // Cabecera GBA: el byte 0xB2 siempre vale 0x96 en un ROM válido.
         if (buf.byteLength < 1024 || u8[0xB2] !== 0x96) {
-          toast("Ese archivo no parece un ROM de GBA válido.");
+          toast("Ese archivo no parece un ROM de GBA válido (cabecera no reconocida, " + fmtSize(buf.byteLength) + ").");
           return;
         }
         return sha256hex(buf).then(function (hash) {
@@ -524,18 +592,126 @@
             toast("«" + rec.name + "» se agregó a tu biblioteca.");
             refreshLibrary();
             playRom(rec.id);
+          }, function (err) {
+            if (err && err.name === "QuotaExceededError") {
+              toast("El juego se leyó bien, pero no cabe en el almacenamiento de este navegador. Borra juegos de la biblioteca o libera espacio.");
+            } else {
+              toast("El juego se leyó bien, pero no se pudo guardar en tu biblioteca. Inténtalo de nuevo.");
+            }
           });
+        }, function () {
+          toast("No se pudo procesar ese archivo. Inténtalo de nuevo.");
         });
-      }).catch(function () {
-        toast("No se pudo leer ese archivo.");
+      }, function () {
+        toast("No se pudo leer ese archivo ni en el segundo intento. Vuelve a elegirlo; si sigue fallando, prueba con otra copia del ROM.");
       });
     }
+
+    /* ---------- Carga del juego: indicador, vigilante y error ----------
+       Antes la pantalla inicial se ocultaba al instante y, si el núcleo
+       se atascaba, quedaba un negro silencioso sin salida. Ahora hay una
+       pantalla de «Cargando juego…» con la fase actual, un vigilante que
+       detecta el atasco a los 25 s y una pantalla de error con
+       diagnóstico y botones para reintentar, seguir esperando o elegir
+       otro juego. */
+    var emuRunning = false;
+    var loadSettled = false;
+    var loadAbandoned = false;
+    var loadStartedAt = 0;
+    var loadPoll = null;
+    var loadTimeout = null;
+    var lastLoadError = "";
+
+    window.addEventListener("error", function (ev) {
+      if (emuStarted && !loadSettled && ev && ev.message) lastLoadError = String(ev.message);
+    });
+
+    function setLoadStatus(txt) {
+      var el = $("load-status");
+      if (el) el.textContent = txt;
+    }
+    function showLoading(rom) {
+      loadSettled = false;
+      loadAbandoned = false;
+      loadStartedAt = Date.now();
+      lastLoadError = "";
+      $("load-game-name").textContent = rom ? rom.name : "";
+      setLoadStatus("Preparando el juego…");
+      $("load-hint").hidden = true;
+      $("screen-error").hidden = true;
+      $("screen-loading").hidden = false;
+    }
+    function clearLoadTimers() {
+      if (loadPoll) { clearInterval(loadPoll); loadPoll = null; }
+      if (loadTimeout) { clearTimeout(loadTimeout); loadTimeout = null; }
+    }
+    function loadDiagnostics() {
+      var parts = [];
+      parts.push(window.EJS_emulator ? "el núcleo respondió" : "el núcleo no respondió");
+      parts.push($("game").querySelector("canvas") ? "la pantalla del juego se creó" : "la pantalla del juego no se creó");
+      parts.push("pasaron " + Math.round((Date.now() - loadStartedAt) / 1000) + " s");
+      if (lastLoadError) parts.push("último error: " + lastLoadError);
+      return "Diagnóstico: " + parts.join(" · ") + ".";
+    }
+    function showLoadError(detail) {
+      if (loadSettled || loadAbandoned) return;
+      clearLoadTimers();
+      $("screen-loading").hidden = true;
+      $("load-error-detail").textContent = detail + " " + loadDiagnostics();
+      $("screen-error").hidden = false;
+      toast("El juego no arrancó. Revisa la pantalla para reintentar.");
+    }
+    function startLoadWatchdog(extraMs) {
+      clearLoadTimers();
+      if (!loadStartedAt) loadStartedAt = Date.now();
+      loadPoll = setInterval(function () {
+        if (loadSettled || loadAbandoned) { clearLoadTimers(); return; }
+        if (!window.EJS_emulator) setLoadStatus("Cargando el núcleo mGBA…");
+        else if (!$("game").querySelector("canvas")) setLoadStatus("Creando la pantalla del juego…");
+        else setLoadStatus("Iniciando la partida…");
+        if (Date.now() - loadStartedAt > 12000) $("load-hint").hidden = false;
+      }, 600);
+      loadTimeout = setTimeout(function () {
+        showLoadError("El emulador tardó demasiado en arrancar y la pantalla quedó en negro. Suele ser un atasco al cargar el núcleo (WebAssembly) o una conexión lenta.");
+      }, extraMs || 25000);
+    }
+    $("load-retry-btn").addEventListener("click", function () { location.reload(); });
+    $("load-wait-btn").addEventListener("click", function () {
+      $("screen-error").hidden = true;
+      $("screen-loading").hidden = false;
+      setLoadStatus("Siguiendo la carga…");
+      startLoadWatchdog(20000);
+    });
+    $("load-other-btn").addEventListener("click", function () {
+      loadAbandoned = true;
+      clearLoadTimers();
+      $("screen-error").hidden = true;
+      $("screen-loading").hidden = true;
+      $("screen-idle").hidden = false;
+      $("power-led").classList.remove("on");
+      $("now-playing").textContent = "Sin juego cargado";
+      document.title = "Emulador GBA";
+      currentGame = null;
+      emuStarted = false;
+      emuRunning = false;
+      enableTransport(false);
+      if (window.history && history.replaceState) {
+        history.replaceState(null, "", location.pathname + location.search);
+      } else {
+        location.hash = "";
+      }
+      refreshLibrary();
+      refreshStateSlots();
+      toast("Elige otro juego de tu biblioteca.");
+    });
 
     /* ---------- Arranque del emulador ---------- */
     function startEmulator(rom) {
       currentGame = rom;
       emuStarted = true;
+      emuRunning = false;
       $("screen-idle").hidden = true;
+      showLoading(rom);
       $("power-led").classList.add("on");
       $("now-playing").textContent = rom.name;
       document.title = rom.name + " · Emulador GBA";
@@ -584,15 +760,29 @@
         netplay: { visible: false },
         cheat: { visible: false }
       };
-      window.EJS_ready = function () { enableTransport(true); };
-      window.EJS_onGameStart = function () { enableTransport(true); };
+      window.EJS_ready = function () {
+        if (loadAbandoned) return;
+        setLoadStatus("Núcleo listo. Iniciando la partida…");
+        enableTransport(true);
+      };
+      window.EJS_onGameStart = function () {
+        if (loadAbandoned) return;
+        loadSettled = true;
+        clearLoadTimers();
+        emuRunning = true;
+        $("screen-loading").hidden = true;
+        $("screen-error").hidden = true;
+        enableTransport(true);
+        refreshStateSlots();
+      };
 
       var s = document.createElement("script");
       s.src = EJS_DATA + "loader.js";
       s.onerror = function () {
-        toast("No se pudo cargar el núcleo del emulador. Revisa tu conexión.");
+        showLoadError("No se pudo cargar el archivo del núcleo del emulador (data:application/javascript;base64,KGFzeW5jIGZ1bmN0aW9uKCkgewogICAgY29uc3Qgc2NyaXB0cyA9IFsKICAgICAgICAiZW11bGF0b3IuanMiLAogICAgICAgICJuaXBwbGVqcy5qcyIsCiAgICAgICAgInNoYWRlcnMuanMiLAogICAgICAgICJzdG9yYWdlLmpzIiwKICAgICAgICAiZ2FtZXBhZC5qcyIsCiAgICAgICAgIkdhbWVNYW5hZ2VyLmpzIiwKICAgICAgICAic29ja2V0LmlvLm1pbi5qcyIsCiAgICAgICAgImNvbXByZXNzaW9uLmpzIgogICAgXTsKCiAgICBjb25zdCBmb2xkZXJQYXRoID0gKHBhdGgpID0+IHBhdGguc3Vic3RyaW5nKDAsIHBhdGgubGVuZ3RoIC0gcGF0aC5zcGxpdCgiLyIpLnBvcCgpLmxlbmd0aCk7CiAgICBsZXQgc2NyaXB0UGF0aCA9ICh0eXBlb2Ygd2luZG93LkVKU19wYXRodG9kYXRhID09PSAic3RyaW5nIikgPyB3aW5kb3cuRUpTX3BhdGh0b2RhdGEgOiBmb2xkZXJQYXRoKChuZXcgVVJMKGRvY3VtZW50LmN1cnJlbnRTY3JpcHQuc3JjKSkucGF0aG5hbWUpOwogICAgaWYgKCFzY3JpcHRQYXRoLmVuZHNXaXRoKCIvIikpIHNjcmlwdFBhdGggKz0gIi8iOwogICAgLy9jb25zb2xlLmxvZyhzY3JpcHRQYXRoKTsKICAgIGZ1bmN0aW9uIGxvYWRTY3JpcHQoZmlsZSkgewogICAgICAgIHJldHVybiBuZXcgUHJvbWlzZShmdW5jdGlvbihyZXNvbHZlKSB7CiAgICAgICAgICAgIGxldCBzY3JpcHQgPSBkb2N1bWVudC5jcmVhdGVFbGVtZW50KCJzY3JpcHQiKTsKICAgICAgICAgICAgc2NyaXB0LnNyYyA9IGZ1bmN0aW9uKCkgewogICAgICAgICAgICAgICAgaWYgKCJ1bmRlZmluZWQiICE9IHR5cGVvZiBFSlNfcGF0aHMgJiYgdHlwZW9mIEVKU19wYXRoc1tmaWxlXSA9PT0gInN0cmluZyIpIHsKICAgICAgICAgICAgICAgICAgICByZXR1cm4gRUpTX3BhdGhzW2ZpbGVdOwogICAgICAgICAgICAgICAgfSBlbHNlIGlmIChmaWxlLmVuZHNXaXRoKCJlbXVsYXRvci5taW4uanMiKSkgewogICAgICAgICAgICAgICAgICAgIHJldHVybiBzY3JpcHRQYXRoICsgZmlsZTsKICAgICAgICAgICAgICAgIH0gZWxzZSB7CiAgICAgICAgICAgICAgICAgICAgcmV0dXJuIHNjcmlwdFBhdGggKyAic3JjLyIgKyBmaWxlOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICB9KCk7CiAgICAgICAgICAgIHNjcmlwdC5vbmxvYWQgPSByZXNvbHZlOwogICAgICAgICAgICBzY3JpcHQub25lcnJvciA9ICgpID0+IHsKICAgICAgICAgICAgICAgIGZpbGVzbWlzc2luZyhmaWxlKS50aGVuKGUgPT4gcmVzb2x2ZSgpKTsKICAgICAgICAgICAgfQogICAgICAgICAgICBkb2N1bWVudC5oZWFkLmFwcGVuZENoaWxkKHNjcmlwdCk7CiAgICAgICAgfSkKICAgIH0KCiAgICBmdW5jdGlvbiBsb2FkU3R5bGUoZmlsZSkgewogICAgICAgIHJldHVybiBuZXcgUHJvbWlzZShmdW5jdGlvbihyZXNvbHZlKSB7CiAgICAgICAgICAgIGxldCBjc3MgPSBkb2N1bWVudC5jcmVhdGVFbGVtZW50KCJsaW5rIik7CiAgICAgICAgICAgIGNzcy5yZWwgPSAic3R5bGVzaGVldCI7CiAgICAgICAgICAgIGNzcy5ocmVmID0gZnVuY3Rpb24oKSB7CiAgICAgICAgICAgICAgICBpZiAoInVuZGVmaW5lZCIgIT0gdHlwZW9mIEVKU19wYXRocyAmJiB0eXBlb2YgRUpTX3BhdGhzW2ZpbGVdID09PSAic3RyaW5nIikgewogICAgICAgICAgICAgICAgICAgIHJldHVybiBFSlNfcGF0aHNbZmlsZV07CiAgICAgICAgICAgICAgICB9IGVsc2UgewogICAgICAgICAgICAgICAgICAgIHJldHVybiBzY3JpcHRQYXRoICsgZmlsZTsKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgfSgpOwogICAgICAgICAgICBjc3Mub25sb2FkID0gcmVzb2x2ZTsKICAgICAgICAgICAgY3NzLm9uZXJyb3IgPSAoKSA9PiB7CiAgICAgICAgICAgICAgICBmaWxlc21pc3NpbmcoZmlsZSkudGhlbihlID0+IHJlc29sdmUoKSk7CiAgICAgICAgICAgIH0KICAgICAgICAgICAgZG9jdW1lbnQuaGVhZC5hcHBlbmRDaGlsZChjc3MpOwogICAgICAgIH0pCiAgICB9CgogICAgYXN5bmMgZnVuY3Rpb24gZmlsZXNtaXNzaW5nKGZpbGUpIHsKICAgICAgICBjb25zb2xlLmVycm9yKCJGYWlsZWQgdG8gbG9hZCAiICsgZmlsZSk7CiAgICAgICAgbGV0IG1pbmlmaWVkRmFpbGVkID0gZmlsZS5pbmNsdWRlcygiLm1pbi4iKSAmJiAhZmlsZS5pbmNsdWRlcygic29ja2V0Iik7CiAgICAgICAgY29uc29sZVttaW5pZmllZEZhaWxlZCA/ICJ3YXJuIiA6ICJlcnJvciJdKCJGYWlsZWQgdG8gbG9hZCAiICsgZmlsZSArICIgYmVhY3VzZSBpdCdzIGxpa2x5IHRoYXQgdGhlIG1pbmlmaWVkIGZpbGVzIGFyZSBtaXNzaW5nLlxuVG8gZml4IHRoaXMgeW91IGhhdmUgMyBvcHRpb25zOlxuMS4gWW91IGNhbiBkb3dubG9hZCB0aGUgemlwIGZyb20gdGhlIGxhdGVzdCByZWxlYXNlIGhlcmU6IGh0dHBzOi8vZ2l0aHViLmNvbS9FbXVsYXRvckpTL0VtdWxhdG9ySlMvcmVsZWFzZXMvbGF0ZXN0IC0gU3RhYmxlXG4yLiBZb3UgY2FuIGRvd25sb2FkIHRoZSB6aXAgZnJvbSBoZXJlOiBodHRwczovL2Nkbi5lbXVsYXRvcmpzLm9yZy9sYXRlc3QvZGF0YS9lbXVsYXRvci5taW4uemlwIGFuZCBleHRyYWN0IGl0IHRvIHRoZSBkYXRhLyBmb2xkZXIuIChlYXNpZXN0IG9wdGlvbikgLSBCZXRhXG4zLiBZb3UgY2FuIGJ1aWxkIHRoZSBmaWxlcyBieSBydW5uaW5nIGBucG0gaSAmJiBucG0gcnVuIGJ1aWxkYCBpbiB0aGUgZGF0YS9taW5pZnkgZm9sZGVyLiAoaGFyZGVzdCBvcHRpb24pIC0gQmV0YVxuTm90ZTogeW91IHdpbGwgcHJvYmFibHkgbmVlZCB0byBkbyB0aGUgc2FtZSBmb3IgdGhlIGNvcmVzLCBleHRyYWN0IHRoZW0gdG8gdGhlIGRhdGEvY29yZXMvIGZvbGRlci4iKTsKICAgICAgICBpZiAobWluaWZpZWRGYWlsZWQpIHsKICAgICAgICAgICAgY29uc29sZS5sb2coIkF0dGVtcHRpbmcgdG8gbG9hZCBub24tbWluaWZpZWQgZmlsZXMiKTsKICAgICAgICAgICAgaWYgKGZpbGUgPT09ICJlbXVsYXRvci5taW4uanMiKSB7CiAgICAgICAgICAgICAgICBmb3IgKGxldCBpID0gMDsgaSA8IHNjcmlwdHMubGVuZ3RoOyBpKyspIHsKICAgICAgICAgICAgICAgICAgICBhd2FpdCBsb2FkU2NyaXB0KHNjcmlwdHNbaV0pOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICB9IGVsc2UgewogICAgICAgICAgICAgICAgYXdhaXQgbG9hZFN0eWxlKCJlbXVsYXRvci5jc3MiKTsKICAgICAgICAgICAgfQogICAgICAgIH0KICAgIH0KCiAgICBpZiAoKCJ1bmRlZmluZWQiICE9IHR5cGVvZiBFSlNfREVCVUdfWFggJiYgdHJ1ZSA9PT0gRUpTX0RFQlVHX1hYKSkgewogICAgICAgIGZvciAobGV0IGkgPSAwOyBpIDwgc2NyaXB0cy5sZW5ndGg7IGkrKykgewogICAgICAgICAgICBhd2FpdCBsb2FkU2NyaXB0KHNjcmlwdHNbaV0pOwogICAgICAgIH0KICAgICAgICBhd2FpdCBsb2FkU3R5bGUoImVtdWxhdG9yLmNzcyIpOwogICAgfSBlbHNlIHsKICAgICAgICBhd2FpdCBsb2FkU2NyaXB0KCJlbXVsYXRvci5taW4uanMiKTsKICAgICAgICBhd2FpdCBsb2FkU3R5bGUoImVtdWxhdG9yLm1pbi5jc3MiKTsKICAgIH0KICAgIGNvbnN0IGNvbmZpZyA9IHt9OwogICAgY29uZmlnLmdhbWVVcmwgPSB3aW5kb3cuRUpTX2dhbWVVcmw7CiAgICBjb25maWcuZGF0YVBhdGggPSBzY3JpcHRQYXRoOwogICAgY29uZmlnLnN5c3RlbSA9IHdpbmRvdy5FSlNfY29yZTsKICAgIGNvbmZpZy5iaW9zVXJsID0gd2luZG93LkVKU19iaW9zVXJsOwogICAgY29uZmlnLmdhbWVOYW1lID0gd2luZG93LkVKU19nYW1lTmFtZTsKICAgIGNvbmZpZy5jb2xvciA9IHdpbmRvdy5FSlNfY29sb3I7CiAgICBjb25maWcuYWRVcmwgPSB3aW5kb3cuRUpTX0FkVXJsOwogICAgY29uZmlnLmFkTW9kZSA9IHdpbmRvdy5FSlNfQWRNb2RlOwogICAgY29uZmlnLmFkVGltZXIgPSB3aW5kb3cuRUpTX0FkVGltZXI7CiAgICBjb25maWcuYWRTaXplID0gd2luZG93LkVKU19BZFNpemU7CiAgICBjb25maWcuYWxpZ25TdGFydEJ1dHRvbiA9IHdpbmRvdy5FSlNfYWxpZ25TdGFydEJ1dHRvbjsKICAgIGNvbmZpZy5WaXJ0dWFsR2FtZXBhZFNldHRpbmdzID0gd2luZG93LkVKU19WaXJ0dWFsR2FtZXBhZFNldHRpbmdzOwogICAgY29uZmlnLmJ1dHRvbk9wdHMgPSB3aW5kb3cuRUpTX0J1dHRvbnM7CiAgICBjb25maWcudm9sdW1lID0gd2luZG93LkVKU192b2x1bWU7CiAgICBjb25maWcuZGVmYXVsdENvbnRyb2xsZXJzID0gd2luZG93LkVKU19kZWZhdWx0Q29udHJvbHM7CiAgICBjb25maWcuc3RhcnRPbkxvYWQgPSB3aW5kb3cuRUpTX3N0YXJ0T25Mb2FkZWQ7CiAgICBjb25maWcuZnVsbHNjcmVlbk9uTG9hZCA9IHdpbmRvdy5FSlNfZnVsbHNjcmVlbk9uTG9hZGVkOwogICAgY29uZmlnLmZpbGVQYXRocyA9IHdpbmRvdy5FSlNfcGF0aHM7CiAgICBjb25maWcubG9hZFN0YXRlID0gd2luZG93LkVKU19sb2FkU3RhdGVVUkw7CiAgICBjb25maWcuY2FjaGVMaW1pdCA9IHdpbmRvdy5FSlNfQ2FjaGVMaW1pdDsKICAgIGNvbmZpZy5jaGVhdHMgPSB3aW5kb3cuRUpTX2NoZWF0czsKICAgIGNvbmZpZy5kZWZhdWx0T3B0aW9ucyA9IHdpbmRvdy5FSlNfZGVmYXVsdE9wdGlvbnM7CiAgICBjb25maWcuZ2FtZVBhdGNoVXJsID0gd2luZG93LkVKU19nYW1lUGF0Y2hVcmw7CiAgICBjb25maWcuZ2FtZVBhcmVudFVybCA9IHdpbmRvdy5FSlNfZ2FtZVBhcmVudFVybDsKICAgIGNvbmZpZy5uZXRwbGF5VXJsID0gd2luZG93LkVKU19uZXRwbGF5U2VydmVyOwogICAgY29uZmlnLmdhbWVJZCA9IHdpbmRvdy5FSlNfZ2FtZUlEOwogICAgY29uZmlnLmJhY2tncm91bmRJbWcgPSB3aW5kb3cuRUpTX2JhY2tncm91bmRJbWFnZTsKICAgIGNvbmZpZy5iYWNrZ3JvdW5kQmx1ciA9IHdpbmRvdy5FSlNfYmFja2dyb3VuZEJsdXI7CiAgICBjb25maWcuYmFja2dyb3VuZENvbG9yID0gd2luZG93LkVKU19iYWNrZ3JvdW5kQ29sb3I7CiAgICBjb25maWcuY29udHJvbFNjaGVtZSA9IHdpbmRvdy5FSlNfY29udHJvbFNjaGVtZTsKICAgIGNvbmZpZy50aHJlYWRzID0gd2luZG93LkVKU190aHJlYWRzOwogICAgY29uZmlnLmRpc2FibGVDdWUgPSB3aW5kb3cuRUpTX2Rpc2FibGVDdWU7CiAgICBjb25maWcuc3RhcnRCdG5OYW1lID0gd2luZG93LkVKU19zdGFydEJ1dHRvbk5hbWU7CiAgICBjb25maWcuc29mdExvYWQgPSB3aW5kb3cuRUpTX3NvZnRMb2FkOwogICAgY29uZmlnLmNhcHR1cmUgPSB3aW5kb3cuRUpTX3NjcmVlbkNhcHR1cmU7CiAgICBjb25maWcuZXh0ZXJuYWxGaWxlcyA9IHdpbmRvdy5FSlNfZXh0ZXJuYWxGaWxlczsKICAgIGNvbmZpZy5kb250RXh0cmFjdEJJT1MgPSB3aW5kb3cuRUpTX2RvbnRFeHRyYWN0QklPUzsKICAgIGNvbmZpZy5kaXNhYmxlRGF0YWJhc2VzID0gd2luZG93LkVKU19kaXNhYmxlRGF0YWJhc2VzOwogICAgY29uZmlnLmRpc2FibGVMb2NhbFN0b3JhZ2UgPSB3aW5kb3cuRUpTX2Rpc2FibGVMb2NhbFN0b3JhZ2U7CiAgICBjb25maWcuZm9yY2VMZWdhY3lDb3JlcyA9IHdpbmRvdy5FSlNfZm9yY2VMZWdhY3lDb3JlczsKICAgIGNvbmZpZy5ub0F1dG9Gb2N1cyA9IHdpbmRvdy5FSlNfbm9BdXRvRm9jdXM7CiAgICBjb25maWcudmlkZW9Sb3RhdGlvbiA9IHdpbmRvdy5FSlNfdmlkZW9Sb3RhdGlvbjsKICAgIGNvbmZpZy5oaWRlU2V0dGluZ3MgPSB3aW5kb3cuRUpTX2hpZGVTZXR0aW5nczsKICAgIGNvbmZpZy5zaGFkZXJzID0gT2JqZWN0LmFzc2lnbih7fSwgd2luZG93LkVKU19TSEFERVJTLCB3aW5kb3cuRUpTX3NoYWRlcnMgPyB3aW5kb3cuRUpTX3NoYWRlcnMgOiB7fSk7CgogICAgbGV0IHN5c3RlbUxhbmc7CiAgICB0cnkgewogICAgICAgIHN5c3RlbUxhbmcgPSBJbnRsLkRhdGVUaW1lRm9ybWF0KCkucmVzb2x2ZWRPcHRpb25zKCkubG9jYWxlOwogICAgfSBjYXRjaChlKSB7fSAvL0lnbm9yZQogICAgaWYgKCh0eXBlb2Ygd2luZG93LkVKU19sYW5ndWFnZSA9PT0gInN0cmluZyIgJiYgd2luZG93LkVKU19sYW5ndWFnZSAhPT0gImVuLVVTIikgfHwgKHN5c3RlbUxhbmcgJiYgd2luZG93LkVKU19kaXNhYmxlQXV0b0xhbmcgIT09IGZhbHNlKSkgewogICAgICAgIGNvbnN0IGxhbmd1YWdlID0gd2luZG93LkVKU19sYW5ndWFnZSB8fCBzeXN0ZW1MYW5nOwogICAgICAgIHRyeSB7CiAgICAgICAgICAgIGxldCBwYXRoOwogICAgICAgICAgICBjb25zb2xlLmxvZygiTG9hZGluZyBsYW5ndWFnZSIsIGxhbmd1YWdlKTsKICAgICAgICAgICAgaWYgKCJ1bmRlZmluZWQiICE9IHR5cGVvZiBFSlNfcGF0aHMgJiYgdHlwZW9mIEVKU19wYXRoc1tsYW5ndWFnZV0gPT09ICJzdHJpbmciKSB7CiAgICAgICAgICAgICAgICBwYXRoID0gRUpTX3BhdGhzW2xhbmd1YWdlXTsKICAgICAgICAgICAgfSBlbHNlIHsKICAgICAgICAgICAgICAgIHBhdGggPSBzY3JpcHRQYXRoICsgImxvY2FsaXphdGlvbi8iICsgbGFuZ3VhZ2UgKyAiLmpzb24iOwogICAgICAgICAgICB9CiAgICAgICAgICAgIGNvbmZpZy5sYW5ndWFnZSA9IGxhbmd1YWdlOwogICAgICAgICAgICBjb25maWcubGFuZ0pzb24gPSBKU09OLnBhcnNlKGF3YWl0IChhd2FpdCBmZXRjaChwYXRoKSkudGV4dCgpKTsKICAgICAgICB9IGNhdGNoKGUpIHsKICAgICAgICAgICAgY29uc29sZS5sb2coIk1pc3NpbmcgbGFuZ3VhZ2UiLCBsYW5ndWFnZSwgIiEhIik7CiAgICAgICAgICAgIGRlbGV0ZSBjb25maWcubGFuZ3VhZ2U7CiAgICAgICAgICAgIGRlbGV0ZSBjb25maWcubGFuZ0pzb247CiAgICAgICAgfQogICAgfQoKICAgIHdpbmRvdy5FSlNfZW11bGF0b3IgPSBuZXcgRW11bGF0b3JKUyhFSlNfcGxheWVyLCBjb25maWcpOwogICAgd2luZG93LkVKU19hZEJsb2NrZWQgPSAodXJsLCBkZWwpID0+IHdpbmRvdy5FSlNfZW11bGF0b3IuYWRCbG9ja2VkKHVybCwgZGVsKTsKICAgIGlmICh0eXBlb2Ygd2luZG93LkVKU19yZWFkeSA9PT0gImZ1bmN0aW9uIikgewogICAgICAgIHdpbmRvdy5FSlNfZW11bGF0b3Iub24oInJlYWR5Iiwgd2luZG93LkVKU19yZWFkeSk7CiAgICB9CiAgICBpZiAodHlwZW9mIHdpbmRvdy5FSlNfb25HYW1lU3RhcnQgPT09ICJmdW5jdGlvbiIpIHsKICAgICAgICB3aW5kb3cuRUpTX2VtdWxhdG9yLm9uKCJzdGFydCIsIHdpbmRvdy5FSlNfb25HYW1lU3RhcnQpOwogICAgfQogICAgaWYgKHR5cGVvZiB3aW5kb3cuRUpTX29uTG9hZFN0YXRlID09PSAiZnVuY3Rpb24iKSB7CiAgICAgICAgd2luZG93LkVKU19lbXVsYXRvci5vbigibG9hZFN0YXRlIiwgd2luZG93LkVKU19vbkxvYWRTdGF0ZSk7CiAgICB9CiAgICBpZiAodHlwZW9mIHdpbmRvdy5FSlNfb25TYXZlU3RhdGUgPT09ICJmdW5jdGlvbiIpIHsKICAgICAgICB3aW5kb3cuRUpTX2VtdWxhdG9yLm9uKCJzYXZlU3RhdGUiLCB3aW5kb3cuRUpTX29uU2F2ZVN0YXRlKTsKICAgIH0KICAgIGlmICh0eXBlb2Ygd2luZG93LkVKU19vbkxvYWRTYXZlID09PSAiZnVuY3Rpb24iKSB7CiAgICAgICAgd2luZG93LkVKU19lbXVsYXRvci5vbigibG9hZFNhdmUiLCB3aW5kb3cuRUpTX29uTG9hZFNhdmUpOwogICAgfQogICAgaWYgKHR5cGVvZiB3aW5kb3cuRUpTX29uU2F2ZVNhdmUgPT09ICJmdW5jdGlvbiIpIHsKICAgICAgICB3aW5kb3cuRUpTX2VtdWxhdG9yLm9uKCJzYXZlU2F2ZSIsIHdpbmRvdy5FSlNfb25TYXZlU2F2ZSk7CiAgICB9Cn0pKCk7Cg==). Revisa tu conexión.");
       };
       document.body.appendChild(s);
+      startLoadWatchdog();
       refreshStateSlots();
     }
     function playRom(id) {
@@ -671,11 +861,11 @@
         info.appendChild(nm); info.appendChild(dt);
         var save = document.createElement("button");
         save.type = "button"; save.className = "btn primary small"; save.textContent = "Guardar";
-        save.disabled = !emuStarted;
+        save.disabled = !emuRunning;
         save.addEventListener("click", function () { saveState(slot); });
         var load = document.createElement("button");
         load.type = "button"; load.className = "btn ghost small"; load.textContent = "Cargar";
-        load.disabled = !emuStarted || !rec;
+        load.disabled = !emuRunning || !rec;
         load.addEventListener("click", function () { loadState(slot); });
         row.appendChild(info); row.appendChild(save); row.appendChild(load);
         wrap.appendChild(row);
@@ -941,6 +1131,8 @@
           } else {
             toast("Ese juego ya no está en tu biblioteca.");
           }
+        }, function () {
+          toast("No se pudo abrir tu biblioteca guardada en este navegador.");
         });
       }
       refreshStateSlots();
