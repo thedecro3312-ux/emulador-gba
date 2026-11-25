@@ -1,0 +1,26 @@
+name: Copy to index
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  copy-to-index:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Copy uploaded file to index.html and remove it
+        run: |
+          cp emulador-gba-publico.html index.html
+          rm emulador-gba-publico.html
+      - name: Commit result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git add -u emulador-gba-publico.html
+          git commit -m "Replace index.html with updated emulator page"
+          git push
