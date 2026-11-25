@@ -277,6 +277,25 @@
       }
       .mp-log:empty { display: none; }
 
+      /* Servidor netplay: casilla para pegar la dirección */
+      .netplay-form { margin: 14px 0 6px; }
+      .netplay-form label { display: block; font-weight: 700; font-size: 14px; margin: 0 0 6px; }
+      .netplay-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
+      .netplay-row input {
+        flex: 1 1 180px; min-width: 0; width: 100%; min-height: 40px;
+        border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+        background: var(--panel); color: var(--panel-ink);
+        font-size: 14px;
+      }
+      .netplay-row input::placeholder { color: var(--panel-soft); opacity: .85; }
+      .netplay-row .btn[hidden] { display: none; }
+      .netplay-current { word-break: break-all; overflow-wrap: anywhere; margin-top: 8px !important; }
+      .netplay-current span { font-weight: 600; }
+      .netplay-feedback { margin: 8px 0 0; font-size: 13.5px; line-height: 1.45; }
+      .netplay-feedback[hidden] { display: none; }
+      .netplay-feedback.is-error { color: var(--danger); font-weight: 600; }
+      .netplay-feedback.is-info { color: var(--panel-soft); }
+
       /* Controles */
       .keys { width: 100%; border-collapse: collapse; font-size: 14px; }
       .keys td { padding: 7px 6px; border-bottom: 1px solid var(--line); }
@@ -396,7 +415,16 @@
           <h2>Multijugador · Cable link</h2>
           <p class="note">Crea una sala con un código de 4 letras o únete a la de tu amigo. Al conectarse, la sala <strong>comprueba que los dos tengan cargado exactamente el mismo juego</strong> (mismo hash del ROM) y muestra si están esperando jugador, conectados o si el otro se desconectó.</p>
           <p class="note">Multijugador por cable link: las salas conectan a los dos jugadores y verifican que tengan el mismo ROM, pero el juego en sí todavía no se sincroniza. El cable link necesita el núcleo mGBA Dual y un servidor netplay: el núcleo actual no expone el puerto serie (SIO) y el servidor público de EmulatorJS no está disponible ahora mismo. Por ahora, cada quien juega su propia partida.</p>
-          <p class="note" id="mp-netplay-server" hidden>Servidor netplay: <span id="mp-netplay-server-url"></span></p>
+          <div class="netplay-form">
+            <label for="mp-netplay-input">Servidor netplay (opcional)</label>
+            <div class="netplay-row">
+              <input id="mp-netplay-input" type="text" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://....trycloudflare.com" aria-label="Dirección del servidor netplay" />
+              <button class="btn primary small" id="mp-netplay-apply" type="button">Usar este servidor</button>
+              <button class="btn ghost small" id="mp-netplay-clear" type="button" hidden>Quitar</button>
+            </div>
+            <p class="note netplay-current" id="mp-netplay-server" hidden>Servidor netplay: <span id="mp-netplay-server-url"></span></p>
+            <p class="netplay-feedback" id="mp-netplay-feedback" hidden role="status" aria-live="polite"></p>
+          </div>
           <div class="mp-status"><span class="dot" id="mp-dot"></span><span id="mp-status-text">Sin conexión</span></div>
           <div class="room-actions">
             <button class="btn ghost small" id="mp-copy" type="button" hidden>Copiar código</button>
@@ -474,19 +502,34 @@
     var EJS_DATA = "assets/ejs/";
     var PEER_PREFIX = "emulador-gba-publico-";
 
-    /* ---------- Servidor netplay propio por URL (?netplay=<url>) ----------
-       Si el enlace trae ?netplay=<url> (p. ej. el túnel de Cloudflare del
-       PC que hace de servidor), ese servidor sustituye al valor por
-       defecto de EmulatorJS. Se valida: vacío o sin http:// / https://
-       se ignora y la página se comporta exactamente como siempre. */
+    /* ---------- Servidor netplay propio ----------
+       Prioridad: ?netplay=<url> en el enlace > dirección guardada desde
+       la casilla en localStorage. Ese servidor sustituye al valor por
+       defecto de EmulatorJS y solo se aplica en startEmulator. Se
+       valida: vacío o sin http:// / https:// se ignora. */
+    var NETPLAY_STORAGE_KEY = "emulador-gba-netplay-server";
     var customNetplayServer = null;
+    var urlNetplayServer = null;
     (function () {
-      var raw = new URLSearchParams(window.location.search).get("netplay");
-      if (raw === null) return;
-      var val = raw.trim();
-      if (!val) return;
-      if (val.indexOf("http://") !== 0 && val.indexOf("https://") !== 0) return;
-      customNetplayServer = val;
+      try {
+        var raw = new URLSearchParams(window.location.search).get("netplay");
+        if (raw !== null) {
+          var val = String(raw).trim();
+          if (val && (val.indexOf("http://") === 0 || val.indexOf("https://") === 0)) {
+            urlNetplayServer = val;
+          }
+        }
+      } catch (e) {}
+      if (urlNetplayServer) { customNetplayServer = urlNetplayServer; return; }
+      try {
+        var stored = window.localStorage ? window.localStorage.getItem(NETPLAY_STORAGE_KEY) : null;
+        if (stored) {
+          var sval = String(stored).trim();
+          if (sval && (sval.indexOf("http://") === 0 || sval.indexOf("https://") === 0)) {
+            customNetplayServer = sval;
+          }
+        }
+      } catch (e) {}
     })();
 
     /* ---------- Utilidades ---------- */
@@ -845,9 +888,11 @@
       window.EJS_gameName = rom.name;
       window.EJS_gameID = parseInt(rom.hash.slice(0, 7), 16) || 1;
       window.EJS_pathtodata = EJS_DATA;
-      // Servidor netplay propio si vino por ?netplay=<url>; sin parámetro
-      // no se toca y EmulatorJS usa su valor por defecto.
+      // Servidor netplay propio: viene de ?netplay=<url>, de la casilla
+      // guardada en localStorage o de la casilla en esta sesión. Sin
+      // servidor no se toca y EmulatorJS usa su valor por defecto.
       if (customNetplayServer) window.EJS_netplayServer = customNetplayServer;
+      else { try { delete window.EJS_netplayServer; } catch (e) {} }
       window.EJS_language = "es-ES";
       window.EJS_color = "#574fc0";
       window.EJS_backgroundColor = "#050408";
@@ -967,7 +1012,7 @@
       // Los botones/etiquetas que abren el selector de archivos o
       // recargan la página no necesitan (ni deben) recibir este cambio
       // de foco.
-      if (btn.id === "load-rom-btn" || btn.id === "idle-load-btn" || btn.id === "load-retry-btn") return;
+      if (btn.id === "load-rom-btn" || btn.id === "idle-load-btn" || btn.id === "load-retry-btn" || btn.id === "mp-netplay-apply" || btn.id === "mp-netplay-clear") return;
       // Los botones internos del reproductor de EmulatorJS (ajustes,
       // volumen…) gestionan su propio foco y sus menús: no tocarlos.
       if ($("game").contains(btn)) return;
@@ -1516,14 +1561,78 @@
       this.value = this.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
     });
 
-    /* ---------- Arranque ---------- */
-    // Si vino un servidor netplay propio por ?netplay=<url>, se muestra
-    // cuál está activo en la sección de Multijugador. Sin parámetro, la
-    // línea queda oculta y la sección se ve exactamente como siempre.
-    if (customNetplayServer) {
-      $("mp-netplay-server-url").textContent = customNetplayServer;
-      $("mp-netplay-server").hidden = false;
+    /* ---------- Casilla del servidor netplay ---------- */
+    var netplayInput = $("mp-netplay-input");
+    var netplayApplyBtn = $("mp-netplay-apply");
+    var netplayClearBtn = $("mp-netplay-clear");
+    var netplayFeedback = $("mp-netplay-feedback");
+    function netplaySetFeedback(msg, isError) {
+      if (!netplayFeedback) return;
+      if (!msg) { netplayFeedback.hidden = true; netplayFeedback.textContent = ""; netplayFeedback.className = "netplay-feedback"; return; }
+      netplayFeedback.textContent = msg;
+      netplayFeedback.className = "netplay-feedback " + (isError ? "is-error" : "is-info");
+      netplayFeedback.hidden = false;
     }
+    function netplayRender() {
+      if (customNetplayServer) {
+        if (netplayInput) netplayInput.value = customNetplayServer;
+        $("mp-netplay-server-url").textContent = customNetplayServer;
+        $("mp-netplay-server").hidden = false;
+        if (netplayClearBtn) netplayClearBtn.hidden = false;
+      } else {
+        $("mp-netplay-server").hidden = true;
+        $("mp-netplay-server-url").textContent = "";
+        if (netplayClearBtn) netplayClearBtn.hidden = true;
+      }
+    }
+    function netplayApply() {
+      if (!netplayInput) return;
+      var val = netplayInput.value.trim();
+      if (!val || (val.indexOf("http://") !== 0 && val.indexOf("https://") !== 0)) {
+        netplaySetFeedback("Esa dirección no es válida: tiene que empezar por http:// o https://. Pega la dirección completa, por ejemplo https://algo.trycloudflare.com.", true);
+        try { netplayInput.focus(); } catch (e) {}
+        return;
+      }
+      customNetplayServer = val;
+      urlNetplayServer = null;
+      try { if (window.localStorage) window.localStorage.setItem(NETPLAY_STORAGE_KEY, val); } catch (e) {}
+      if (netplayInput) netplayInput.value = val;
+      netplayRender();
+      if (emuStarted || currentGame) {
+        netplaySetFeedback("Servidor guardado. Se usará al cargar el próximo juego.", false);
+      } else {
+        netplaySetFeedback("Servidor guardado. Quedará listo para cuando cargues un juego.", false);
+      }
+    }
+    function netplayClear() {
+      customNetplayServer = null;
+      urlNetplayServer = null;
+      try { if (window.localStorage) window.localStorage.removeItem(NETPLAY_STORAGE_KEY); } catch (e) {}
+      if (netplayInput) netplayInput.value = "";
+      try { delete window.EJS_netplayServer; } catch (e) { window.EJS_netplayServer = undefined; }
+      netplayRender();
+      if (emuStarted || currentGame) {
+        netplaySetFeedback("Servidor quitado. El cambio se aplicará al cargar el próximo juego.", false);
+      } else {
+        netplaySetFeedback("Servidor quitado.", false);
+      }
+    }
+    if (netplayApplyBtn) netplayApplyBtn.addEventListener("click", netplayApply);
+    if (netplayClearBtn) netplayClearBtn.addEventListener("click", netplayClear);
+    if (netplayInput) {
+      netplayInput.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter") { ev.preventDefault(); netplayApply(); }
+      });
+      netplayInput.addEventListener("input", function () {
+        if (netplayFeedback && netplayFeedback.classList.contains("is-error")) netplaySetFeedback("", false);
+      });
+    }
+    // Al cargar: ?netplay= tiene prioridad; si no, la guardada en
+    // localStorage. En ambos casos se rellena la casilla y se muestra
+    // la línea «Servidor netplay: …».
+    netplayRender();
+
+    /* ---------- Arranque ---------- */
     refreshLibrary().then(function () {
       var m = location.hash.match(/play=([0-9a-f-]{8,})/i);
       if (m) {
