@@ -338,7 +338,7 @@
         <section class="panel" aria-label="Multijugador por cable link">
           <h2>Multijugador · Cable link</h2>
           <p class="note">Crea una sala con un código de 4 letras o únete a la de tu amigo. Al conectarse, la sala <strong>comprueba que los dos tengan cargado exactamente el mismo juego</strong> (mismo hash del ROM) y muestra si están esperando jugador, conectados o si el otro se desconectó.</p>
-          <p class="note"><strong>Lo que falta, con honestidad:</strong> el núcleo mGBA en su versión WebAssembly (vía EmulatorJS) no expone el puerto serial (SIO) del cable link a la página, así que la sincronización del cable <em>dentro</em> de la partida todavía no se pudo conectar a este núcleo. La sala conecta a los dos jugadores y verifica el juego, pero el multijugador dentro del juego aún no funciona; la prueba real con dos dispositivos sigue pendiente.</p>
+          <p class="note">Multijugador por cable link: las salas conectan a los dos jugadores y verifican que tengan el mismo ROM, pero el juego en sí todavía no se sincroniza. El cable link necesita el núcleo mGBA Dual y un servidor netplay: el núcleo actual no expone el puerto serie (SIO) y el servidor público de EmulatorJS no está disponible ahora mismo. Por ahora, cada quien juega su propia partida.</p>
           <div class="mp-status"><span class="dot" id="mp-dot"></span><span id="mp-status-text">Sin conexión</span></div>
 
           <h3>Crear una sala</h3>
