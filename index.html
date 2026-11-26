@@ -220,15 +220,29 @@
 
       /* Biblioteca */
       .lib-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
-      .rom-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+      /* FIX-RISTU-LIB: la columna de la lista no puede medir el contenido
+         (min-content) del nombre largo del ROM: en pantallas estrechas la
+         fila crecía más que el viewport y los botones Jugar/Eliminar
+         quedaban fuera de la pantalla, inalcanzables (overflow-x:hidden).
+         minmax(0,1fr) fija la columna al ancho del panel y la fila se
+         envuelve: el nombre se recorta con puntos suspensivos y los
+         botones siempre quedan visibles. */
+      .rom-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
       .rom-item {
-        display: flex; align-items: center; gap: 10px;
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
         border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+        min-width: 0;
       }
+      .rom-item .btn { flex: none; }
       .rom-item.playing { border-color: var(--shell); box-shadow: 0 0 0 1px var(--shell); }
       .rom-meta { min-width: 0; flex: 1; }
       .rom-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .rom-sub { font-size: 12.5px; color: var(--panel-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      @media (max-width: 560px) {
+        /* En el móvil el nombre va arriba y los botones en su propia
+           fila, siempre visibles y fáciles de pulsar. */
+        .rom-meta { flex: 1 1 100%; }
+      }
       .empty-box {
         border: 1.5px dashed var(--line); border-radius: 12px;
         padding: 18px; text-align: center; color: var(--panel-soft); font-size: 14px;
@@ -814,12 +828,12 @@
         <section class="panel" aria-label="Multijugador por cable link">
           <h2>Multijugador · Cable link</h2>
           <p class="note">Crea una sala con un código de 4 letras o únete a la de tu amigo. Al conectarse, la sala <strong>comprueba que los dos tengan cargado exactamente el mismo juego</strong> (mismo hash del ROM) y muestra si están esperando jugador, conectados o si el otro se desconectó.</p>
-          <p class="note">Multijugador por cable link: las salas conectan a los dos jugadores y verifican que tengan el mismo ROM, pero el juego en sí todavía no se sincroniza. El cable link necesita el núcleo mGBA Dual y un servidor netplay: el núcleo actual no expone el puerto serie (SIO) y el servidor público de EmulatorJS no está disponible ahora mismo. Por ahora, cada quien juega su propia partida.</p>
+          <p class="note">Multijugador por cable link: las salas conectan a los dos jugadores y verifican que tengan el mismo ROM. En modo Solo cada quien juega su propia partida, sin sincronizar. En modo Cable link (Dual) la partida sí se sincroniza por lockstep (cuadro a cuadro, con comprobación de hash cada 60 cuadros): no usa el puerto serie de la GBA, así que las funciones que necesitan el cable físico no aplican, pero los dos juegan la misma partida.</p>
           <div class="mode-toggle" role="group" aria-label="Modo de juego">
             <button class="btn ghost small mode-btn" id="mode-solo-btn" type="button" aria-pressed="true">Solo</button>
             <button class="btn ghost small mode-btn" id="mode-dual-btn" type="button" aria-pressed="false">Cable link (Dual)</button>
           </div>
-          <p class="note" id="dual-mode-note" hidden><strong>Cable link (Dual) — versión en pruebas:</strong> con el núcleo mGBA Dual la partida sí se sincroniza entre los dos jugadores por lockstep (cuadro a cuadro), con comprobación de hash cada 60 cuadros y resincronización si los juegos se separan. Aún no se ha probado en dos aparatos reales, así que puede fallar o desincronizarse. El modo Solo no cambia: sigue siendo el de siempre, con su propio núcleo.</p>
+          <p class="note" id="dual-mode-note" hidden><strong>Cable link (Dual) — versión en pruebas:</strong> con el núcleo mGBA Dual la partida se sincroniza entre los dos jugadores por lockstep (cuadro a cuadro), con comprobación de hash cada 60 cuadros y resincronización si los juegos se separan. Ya se probó en dos aparatos en la misma WiFi, pero sigue en pruebas y puede desincronizarse. La sincronización no usa el puerto serie de la GBA: es el intercambio de entradas por lockstep. El modo Solo no cambia: sigue siendo el de siempre, con su propio núcleo.</p>
           <p class="note" id="dual-room-hint" hidden>Carga primero un juego en modo Dual para poder crear una sala o unirte a una.</p>
           <div class="netplay-form">
             <label for="mp-netplay-input">Servidor netplay (opcional)</label>
@@ -878,7 +892,7 @@
       <!-- ================= ACERCA DE ================= -->
       <section class="panel wide" aria-label="Acerca de">
         <h2>Acerca de</h2>
-        <p>Emulador de Game Boy Advance para el navegador. El núcleo de emulación es <strong>mGBA</strong> (licencia MPL-2.0), integrado mediante <strong>EmulatorJS</strong> (proyecto de código abierto), que aporta la CPU, los gráficos, el sonido y los guardados de batería. Tanto el núcleo como la librería de red están <strong>vendorizados en esta misma página</strong> (carpetas <code>assets/ejs/</code> y <code>assets/peerjs.min.js</code>): no se carga ningún núcleo desde internet ni desde un CDN. Las salas multijugador usan <strong>PeerJS</strong> (licencia MIT) con conexiones directas entre los dos navegadores y comprobación por hash de que ambos corren el mismo ROM; la sincronización del cable link dentro de la partida no está conectada a este núcleo WebAssembly (ver la nota en la sección de Multijugador).</p>
+        <p>Emulador de Game Boy Advance para el navegador. El núcleo de emulación es <strong>mGBA</strong> (licencia MPL-2.0), integrado mediante <strong>EmulatorJS</strong> (proyecto de código abierto), que aporta la CPU, los gráficos, el sonido y los guardados de batería. Tanto el núcleo como la librería de red están <strong>vendorizados en esta misma página</strong> (carpetas <code>assets/ejs/</code> y <code>assets/peerjs.min.js</code>): no se carga ningún núcleo desde internet ni desde un CDN. Las salas multijugador usan <strong>PeerJS</strong> (licencia MIT) con conexiones directas entre los dos navegadores y comprobación por hash de que ambos corren el mismo ROM. En modo Solo la partida no se sincroniza; en modo Cable link (Dual) los dos juegos se sincronizan por lockstep con el núcleo mGBA Dual (ver la nota en la sección de Multijugador).</p>
         <p class="note">Esta versión pública no incluye ningún juego: cada visitante carga sus propios archivos .gba, que se guardan únicamente en su navegador. Úsala solo con ROMs de tu propiedad.</p>
       </section>
     </main>
@@ -2098,9 +2112,10 @@
        MULTIJUGADOR — PeerJS vendorizado, salas con código de 4 letras.
        Protocolo: hola (nombre+hash del ROM) → verificación de que
        ambos corren el mismo juego → conectados + latido (ping).
-       Ojo: la sala solo conecta a los jugadores y verifica el ROM;
-       el núcleo mGBA WASM no expone el puerto SIO, así que la
-       sincronización del cable link dentro de la partida no existe.
+       Ojo: en modo Solo la sala solo conecta a los jugadores y verifica
+       el ROM (el núcleo Solo no expone el puerto SIO y no sincroniza);
+       en modo Dual la sincronización es por lockstep con el núcleo
+       mGBA Dual.
        ============================================================ */
     var peer = null, conn = null, mpRole = null, mpCode = null;
     var mpVerified = false, mpLastSeen = 0, mpHeartbeat = null;
@@ -2309,7 +2324,7 @@
           mpVerified = true;
           mpStatus("Conectado", "ok");
           dualOnVerified();
-          mpLog("Conectados: ambos tienen cargado el mismo juego («" + (currentGame ? currentGame.name : "") + "»). Recuerda: la sincronización del cable link dentro de la partida aún no funciona con este núcleo.");
+          mpLog("Conectados: ambos tienen cargado el mismo juego («" + (currentGame ? currentGame.name : "") + "»). " + (dualMode ? "La partida Dual se sincroniza por lockstep." : "Recuerda: en modo Solo la partida no se sincroniza (cada quien juega la suya)."));
         } else if (myHash && data.hash) {
           mpStatus("Conectado", "wait");
           mpLog("Ojo: el otro jugador cargó un juego distinto («" + (data.nombre || "?") + "»). Carguen el mismo ROM para que la sala lo verifique.");
@@ -2325,7 +2340,7 @@
           mpVerified = true;
           mpStatus("Conectado", "ok");
           dualOnVerified();
-          mpLog("Conectados: el otro jugador confirmó que tiene el mismo juego. La sincronización dentro de la partida aún no funciona con este núcleo.");
+          mpLog("Conectados: el otro jugador confirmó que tiene el mismo juego. " + (dualMode ? "La partida Dual se sincroniza por lockstep." : "La sincronización dentro de la partida aún no funciona con este núcleo (modo Solo)."));
         } else if (!data.ok && currentGame && data.hash && data.hash !== currentGame.hash) {
           mpLog("El anfitrión confirmó que los juegos no coinciden.");
         }
