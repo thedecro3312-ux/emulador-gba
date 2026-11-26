@@ -94,6 +94,7 @@
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .screen-bezel {
+        position: relative;
         background: var(--bezel);
         border-radius: 18px;
         padding: 12px;
@@ -436,7 +437,10 @@
       .touch-edit-hint { font-size: 13px; color: #cfc9f5; }
       /* Con posiciones propias, el área táctil Dual pasa a escenario
          relativo y cada unidad (cruceta entera y cada botón) se coloca
-         por left/top en %: así la posición sobrevive a giros y anchos. */
+         por left/top en %: así la posición sobrevive a giros y anchos.
+         En táctil el área es el marco del juego (punto 2): los % que
+         ya estaban guardados se miden desde ahí, y al arrastrar se
+         guardan contra ese mismo marco. */
       .dual-touch.touch-free { position: relative; height: 216px; display: block; }
       .dual-touch.touch-free[hidden] { display: none; }
       .dual-touch.touch-free .dual-btns { display: contents; }
@@ -447,22 +451,176 @@
       body.editing-touch #game .ejs_virtualGamepad_button,
       body.editing-touch #game .b_dpad { outline: 2px dashed var(--accent); outline-offset: 2px; }
 
+      /* ---------- Táctil: botones ENCIMA del juego (punto 2) ----------
+         Solo en pantallas táctiles (pointer:coarse); en PC no cambia
+         nada. Los botones de acción dejan de estar debajo o en un
+         lateral y pasan a una botonera flotante, compacta y
+         semi-transparente, en la parte superior del área de juego; y
+         los controles táctiles Dual (cruceta, A/B, L/R, Start/Select)
+         se superponen al juego (cruceta abajo a la izquierda, botones
+         abajo a la derecha, semi-transparentes) en vez de quedar
+         debajo de la pantalla. En Solo los controles táctiles ya son
+         el mando virtual de EmulatorJS, que va sobre el juego.
+         El área táctil Dual sigue siendo #dual-touch con sus hijos en
+         % (se respetan las posiciones guardadas de «Editar botones»:
+         el arrastre parte de esa base y guarda contra el marco).
+         En pantalla completa estas reglas de flotación del lateral
+         Dual NO se aplican: ahí manda el reparto por mitades del
+         punto 3 (por eso el :not(:fullscreen) y el :not(.fs-fallback));
+         los controles táctiles sí siguen superpuestos también en
+         pantalla completa. */
+      @media (pointer: coarse) {
+        .console { position: relative; }
+        /* Solo: barra de transporte flotante sobre el juego. En
+           pantallas estrechas se reparte en dos filas cortas en vez
+           de cortarse o exigir desplazamiento lateral. */
+        .transport {
+          position: absolute; top: 60px; left: 26px; right: 26px; z-index: 7;
+          padding-top: 0; flex-wrap: wrap;
+        }
+        .transport .btn {
+          flex: none; min-height: 36px; padding: 8px 12px; font-size: 13px;
+          background: rgba(10, 6, 40, .55);
+        }
+        /* Sin juego en marcha (pantalla inicial visible) la barra no
+           flota: vuelve a su sitio bajo el marco para no tapar el
+           título ni el aviso de la pantalla inicial. */
+        .console:has(.screen-idle:not([hidden])) .transport {
+          position: static; padding-top: 14px;
+        }
+        .console:has(.screen-idle:not([hidden])) .transport .btn { flex: 1 1 auto; }
+        /* Dual: el lateral sale del flujo y sus botones flotan arriba
+           del juego; la pantalla remota queda como PiP arriba a la
+           derecha (debajo de la botonera) y el estado se oculta (ya
+           está en el panel Multijugador). La pantalla local llena
+           todo el ancho del marco. */
+        body:not(.fs-fallback) .screen-bezel:not(:fullscreen) .dual-side {
+          position: absolute; top: 0; left: 0; right: 0; z-index: 7; pointer-events: none;
+        }
+        body:not(.fs-fallback) .screen-bezel:not(:fullscreen) .dual-side .dual-actions {
+          pointer-events: auto; padding: 8px; flex-wrap: wrap;
+        }
+        body:not(.fs-fallback) .screen-bezel:not(:fullscreen) .dual-side .dual-actions .btn {
+          flex: none; min-height: 36px; padding: 8px 12px; font-size: 13px;
+          background: rgba(10, 6, 40, .55);
+        }
+        body:not(.fs-fallback) .screen-bezel:not(:fullscreen) .dual-side .dual-status { display: none; }
+        body:not(.fs-fallback) .screen-bezel:not(:fullscreen) .dual-side .dual-remote {
+          position: absolute; top: 52px; right: 8px; width: 118px; margin: 0; pointer-events: none;
+        }
+        body:not(.fs-fallback) .screen-bezel:not(:fullscreen) .dual-side .dual-remote figcaption { display: none; }
+        /* Dual: controles táctiles superpuestos al juego. El área
+           cubre el marco salvo la fila de «Editar botones», que sigue
+           debajo; en edición la barra es más alta y el área se
+           acorta igual. Sin posiciones guardadas, el flex pone la
+           cruceta abajo a la izquierda y los botones abajo a la
+           derecha; con posiciones, los hijos van por left/top en %. */
+        .dual-touch {
+          position: absolute; top: 0; left: 0; right: 0; bottom: 52px; z-index: 8;
+          pointer-events: none; padding: 0 10px 10px;
+          display: flex; align-items: flex-end; justify-content: space-between;
+        }
+        body.editing-touch .dual-touch { bottom: 96px; }
+        .dual-touch.touch-free { height: auto !important; display: block; }
+        .dual-touch .dual-dpad, .dual-touch .dual-btns { pointer-events: auto; }
+        .dual-touch .dual-btns > .dt-btn { pointer-events: auto; }
+        .dual-touch .dt-btn { background: rgba(10, 6, 40, .55); }
+      }
+
       /* ---------- Pantalla completa (contenedor del juego) ----------
          Se pone en pantalla completa el marco (.screen-bezel), no solo
          el canvas: dentro quedan la pantalla, la vista Dual tal como
-         esté y los botones táctiles. */
+         esté y los botones táctiles.
+         PUNTO 3 — EL JUEGO LLENA LA PANTALLA: en pantalla completa el
+         lienzo se escala al mayor tamaño posible manteniendo el 3:2 de
+         GBA, centrado. Antes el canvas Dual quedaba en width:auto (sus
+         240 px intrínsecos: una ventanita en el centro) y el de Solo se
+         estiraba sin conservar la proporción. Ahora ambos usan
+         width/height 100% + object-fit:contain dentro de un área que
+         sí crece: Solo llena todo el marco; Dual con ambas pantallas
+         reparte el marco en dos mitades (.dual-stage y .dual-side con
+         flex 1 1 0); Dual con «Solo mi pantalla» esconde el lateral y
+         la pantalla local llena todo el marco (el lateral pasa a tira
+         flotante con solo los botones, vía la clase .dual-solo que
+         pone applyDualView). Las mismas reglas valen para la pantalla
+         completa real (:fullscreen) y para el respaldo CSS
+         (body.fs-fallback, punto 1), porque en el respaldo el marco no
+         es el elemento en :fullscreen. */
       .screen-bezel:fullscreen {
         width: 100%; height: 100%; border-radius: 0;
         display: flex; flex-direction: column;
       }
-      .screen-bezel:fullscreen .screen { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; }
-      .screen-bezel:fullscreen .screen-dual { flex: 1 1 auto; min-height: 0; align-items: stretch; }
-      .screen-bezel:fullscreen .dual-stage { display: flex; align-items: center; justify-content: center; }
-      .screen-bezel:fullscreen .dual-stage canvas,
-      .screen-bezel:fullscreen .dual-remote canvas {
-        width: auto; height: auto; max-width: 100%; max-height: 100%;
+      body.fs-fallback .screen-bezel {
+        border-radius: 0; flex: 1 1 auto; min-height: 0;
+        display: flex; flex-direction: column;
       }
-      .screen-bezel:fullscreen .dual-remote { align-self: flex-start; }
+      .screen-bezel:fullscreen .screen,
+      body.fs-fallback .screen-bezel .screen { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; }
+      /* Solo: el canvas de EmulatorJS llena la pantalla conservando
+         el 3:2 (su CSS ya es 100%, pero object-fit evita que se
+         deforme al estirarse a un área más ancha que 3:2). */
+      .screen-bezel:fullscreen #game canvas.ejs_canvas,
+      body.fs-fallback .screen-bezel #game canvas.ejs_canvas {
+        width: 100% !important; height: 100% !important; object-fit: contain;
+      }
+      .screen-bezel:fullscreen .screen-dual,
+      body.fs-fallback .screen-bezel .screen-dual { flex: 1 1 auto; min-height: 0; align-items: stretch; }
+      .screen-bezel:fullscreen .dual-stage,
+      body.fs-fallback .screen-bezel .dual-stage {
+        display: flex; align-items: center; justify-content: center; min-width: 0;
+      }
+      .screen-bezel:fullscreen .dual-stage canvas,
+      body.fs-fallback .screen-bezel .dual-stage canvas {
+        width: 100%; height: 100%; object-fit: contain;
+      }
+      /* Dual, ambas pantallas: cada mitad llena la suya. */
+      .screen-bezel:fullscreen .dual-side,
+      body.fs-fallback .screen-bezel .dual-side { flex: 1 1 0; min-width: 0; }
+      .screen-bezel:fullscreen .dual-remote,
+      body.fs-fallback .screen-bezel .dual-remote {
+        flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; margin: 0;
+      }
+      .screen-bezel:fullscreen .dual-remote canvas,
+      body.fs-fallback .screen-bezel .dual-remote canvas {
+        flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain;
+      }
+      .screen-bezel:fullscreen .dual-status,
+      body.fs-fallback .screen-bezel .dual-status,
+      .screen-bezel:fullscreen .dual-remote figcaption,
+      body.fs-fallback .screen-bezel .dual-remote figcaption { display: none; }
+      /* Dual, «Solo mi pantalla»: el lateral sale del flujo y queda
+         como tira flotante con solo los botones, arriba a la derecha,
+         para que la pantalla local llene todo el marco. */
+      .screen-bezel:fullscreen.dual-solo .dual-side,
+      body.fs-fallback .screen-bezel.dual-solo .dual-side {
+        position: absolute; top: 8px; right: 8px; left: auto; z-index: 9;
+        flex: none; width: auto;
+      }
+      .screen-bezel:fullscreen.dual-solo .dual-side .dual-remote,
+      body.fs-fallback .screen-bezel.dual-solo .dual-side .dual-remote,
+      .screen-bezel:fullscreen.dual-solo .dual-side .dual-status,
+      body.fs-fallback .screen-bezel.dual-solo .dual-side .dual-status { display: none; }
+      /* En pantalla completa no se editan botones: la barra de edición
+         no roba altura al juego (se vuelve a ella al salir). */
+      .screen-bezel:fullscreen .touch-tools,
+      body.fs-fallback .screen-bezel .touch-tools { display: none; }
+      .screen-bezel:fullscreen .dual-touch,
+      body.fs-fallback .screen-bezel .dual-touch { bottom: 0; }
+
+      /* ---------- Pantalla completa por CSS (respaldo, punto 1) ----------
+         Cuando el WebView no admite la Fullscreen API, el cuerpo toma
+         .fs-fallback: se ocultan encabezado, vuelta a la Sala y
+         paneles, y la consola llena el viewport con el marco dentro. */
+      body.fs-fallback { overflow: hidden; }
+      body.fs-fallback .back-sala { display: none; }
+      body.fs-fallback .wrap { max-width: none; padding: 0; height: 100vh; height: 100dvh; }
+      body.fs-fallback .wrap > .grid,
+      body.fs-fallback .wrap > .wide { display: none; }
+      body.fs-fallback .console {
+        position: fixed; inset: 0; z-index: 40;
+        border-radius: 0; display: flex; flex-direction: column;
+      }
+      body.fs-fallback .console-top { display: none; }
     </style>
   </head>
   <body>
@@ -1618,34 +1776,82 @@
        la barra de edición. El mismo botón sale de ella, y en PC
        también Esc. Entrar o salir no pausa nada: solo cambia el
        tamaño, y el foco del teclado se devuelve al juego como tras
-       cualquier otro botón. */
+       cualquier otro botón.
+       PUNTO 1 — RESPALDO CSS: el WebView de Android no admite la
+       Fullscreen API (requestFullscreen no existe o rechaza), así que
+       si la API real no se puede usar se entra en modo «pantalla
+       completa de la app»: body.fs-fallback fija la consola con
+       position:fixed; inset:0 y el marco la llena por flex; se
+       ocultan encabezado, vuelta a la Sala y paneles. Ya NO se
+       muestra el aviso de fallo: se avisa que es el modo de la app.
+       En PC no cambia nada: sigue la API real. Al salir del respaldo
+       se restaura todo y se devuelve el foco sin pausar. */
+    var fsFallback = false;
+    function fsIsOn() { return !!document.fullscreenElement || fsFallback; }
+    function updateFsLabels() {
+      var label = fsIsOn() ? "Salir de pantalla completa" : "Pantalla completa";
+      var b1 = $("btn-fs"); if (b1) b1.textContent = label;
+      var b2 = $("dual-fs-btn"); if (b2) b2.textContent = label;
+    }
+    function fsAfterChange() {
+      // El núcleo re-coloca su canvas al cambiar el tamaño del marco.
+      setTimeout(function () { window.dispatchEvent(new Event("resize")); }, 80);
+      if (!dualMode && emuRunning) setTimeout(refocusGame, 60);
+    }
+    function enterFsFallback() {
+      if (fsFallback) return;
+      fsFallback = true;
+      document.body.classList.add("fs-fallback");
+      updateFsLabels();
+      toast("Pantalla completa de la app: la vista del juego llena la pantalla.");
+      fsAfterChange();
+    }
+    function exitFsFallback() {
+      if (!fsFallback) return;
+      fsFallback = false;
+      document.body.classList.remove("fs-fallback");
+      updateFsLabels();
+      fsAfterChange();
+    }
     function toggleFullscreen() {
       if (document.fullscreenElement) {
         document.exitFullscreen();
         return;
       }
+      if (fsFallback) { exitFsFallback(); return; }
       var el = document.querySelector(".screen-bezel");
       if (!el || typeof el.requestFullscreen !== "function") {
-        toast("Este navegador no admite pantalla completa.");
+        enterFsFallback();
         return;
       }
       try {
         var p = el.requestFullscreen();
         if (p && typeof p.catch === "function") {
-          p.catch(function () { toast("Este navegador no dejó poner la pantalla completa aquí."); });
+          p.catch(function () { enterFsFallback(); });
+        } else if (p === undefined) {
+          // Algunos WebView devuelven undefined y fallan en silencio:
+          // si en 600 ms no entró la pantalla completa real, usa el
+          // respaldo en vez de dejar el botón sin efecto.
+          setTimeout(function () {
+            if (!document.fullscreenElement && !fsFallback) enterFsFallback();
+          }, 600);
         }
       } catch (e) {
-        toast("Este navegador no dejó poner la pantalla completa aquí.");
+        enterFsFallback();
       }
     }
     $("btn-fs").addEventListener("click", toggleFullscreen);
     document.addEventListener("fullscreenchange", function () {
-      var on = !!document.fullscreenElement;
-      var label = on ? "Salir de pantalla completa" : "Pantalla completa";
-      $("btn-fs").textContent = label;
-      var db = $("dual-fs-btn");
-      if (db) db.textContent = label;
-      if (!dualMode && emuRunning) setTimeout(refocusGame, 60);
+      updateFsLabels();
+      fsAfterChange();
+    });
+    document.addEventListener("fullscreenerror", function () {
+      if (!document.fullscreenElement && !fsFallback) enterFsFallback();
+    });
+    // En el respaldo CSS no hay Fullscreen API que capture Esc:
+    // la tecla sale del modo de la app igual que el botón.
+    document.addEventListener("keydown", function (ev) {
+      if (fsFallback && (ev.key === "Escape" || ev.key === "Esc")) exitFsFallback();
     });
 
     /* ---------- Estados guardados (3 espacios por juego) ---------- */
@@ -2284,6 +2490,12 @@
     function applyDualView() {
       var fig = document.querySelector(".dual-remote");
       if (fig) fig.hidden = dualSoloView;
+      // En pantalla completa, con «Solo mi pantalla» el lateral sale
+      // del flujo y la pantalla local llena todo el marco (punto 3):
+      // la clase vive en el marco para que el CSS la vea tanto en
+      // :fullscreen como en el respaldo CSS.
+      var bz = document.querySelector(".screen-bezel");
+      if (bz) bz.classList.toggle("dual-solo", dualSoloView);
       var btn = $("dual-view-btn");
       if (btn) {
         btn.textContent = dualSoloView ? "Ver ambas pantallas" : "Solo mi pantalla";
