@@ -11,7 +11,10 @@
  *    (reliable: true). Los mensajes Dual llevan `dual: true` + `kind`.
  *  - El host (creador de la sala) es la autoridad de ticks: un tick = un
  *    cuadro emulado. Retardo de entrada 3 cuadros; backpressure: el host
- *    no corre más de 5 cuadros por delante del ack más bajo.
+ *    no corre más de 30 cuadros por delante del ack más bajo (~500 ms de
+ *    tolerancia a acks; con 12 el juego se congelaba en cada ráfaga de
+ *    latencia del móvil y los botones dejaban de responder hasta que
+ *    volvían los acks).
  *  - Handshake: dual-hello (host) -> dual-ready (invitado) -> dual-start.
  *  - Hash de estado cada 60 cuadros (jugador 0) y cada 300 (todos). Ante
  *    desync: ambos paran y se muestra cuadro + jugador + hashes, con
@@ -35,7 +38,7 @@
 
 const DUAL_PROTOCOL_VERSION = 1;
 const INPUT_DELAY_FRAMES = 3;    // retardo de entrada (cuadros)
-const MAX_AHEAD_FRAMES = 12;     // backpressure: cuánto puede adelantarse el host (~200 ms de tolerancia a acks; con 5 el audio se vaciaba en cada ráfaga de latencia)
+const MAX_AHEAD_FRAMES = 30;     // backpressure: cuánto puede adelantarse el host (~500 ms de tolerancia a acks; con 12 el juego se congelaba en cada ráfaga de latencia del móvil y los botones dejaban de responder hasta que volvían los acks; con 5 el audio se vaciaba en cada ráfaga)
 const HASH_EVERY_FRAMES = 60;    // hash del jugador 0 cada N cuadros
 const HASH_ALL_EVERY_FRAMES = 300; // hash de todos los jugadores cada N cuadros
 const LATE_INPUT_LIMIT = 30;     // inputs tardíos seguidos antes de pausar y avisar
