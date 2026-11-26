@@ -35,7 +35,7 @@
 
 const DUAL_PROTOCOL_VERSION = 1;
 const INPUT_DELAY_FRAMES = 3;    // retardo de entrada (cuadros)
-const MAX_AHEAD_FRAMES = 5;      // backpressure: cuánto puede adelantarse el host
+const MAX_AHEAD_FRAMES = 12;     // backpressure: cuánto puede adelantarse el host (~200 ms de tolerancia a acks; con 5 el audio se vaciaba en cada ráfaga de latencia)
 const HASH_EVERY_FRAMES = 60;    // hash del jugador 0 cada N cuadros
 const HASH_ALL_EVERY_FRAMES = 300; // hash de todos los jugadores cada N cuadros
 const LATE_INPUT_LIMIT = 30;     // inputs tardíos seguidos antes de pausar y avisar
@@ -52,6 +52,9 @@ const KEY = {
 // Mismo mapeo que el modo Solo y que la tabla «Controles» de la página:
 // X = A, Z = B, A/S = L/R, Enter = Start, Shift (izq. o der.) = Select.
 // (Antes A y B iban al revés: KeyZ era A y KeyX era B.)
+// Es el mapa POR DEFECTO: cada DualPlayer arranca con él y la página
+// puede sustituirlo en caliente con setKeyMap() cuando el jugador
+// reasigna las teclas en el panel «Controles».
 const KEYBOARD_MAP = {
   ArrowUp: KEY.UP, ArrowDown: KEY.DOWN, ArrowLeft: KEY.LEFT, ArrowRight: KEY.RIGHT,
   KeyX: KEY.A, KeyZ: KEY.B, KeyA: KEY.L, KeyS: KEY.R,
@@ -85,6 +88,13 @@ class DualPlayer {
     this.canvases = opts.canvases || null;       // [canvasP0, canvasP1, ...]
     this.onEvent = opts.onEvent || (() => {});   // (type, data) — mensajes a la UI
     this.audioEnabled = opts.audio !== false;
+    this.keyMap = KEYBOARD_MAP;                  // mapa de teclado activo (setKeyMap lo cambia)
+    // Fuente de audio del puente: 5 = mezcla de todos (defecto del
+    // puente), 1–4 = solo ese jugador (índice + 1), 0 = mudo. La
+    // página pasa la suya al construir («Solo mi pantalla» = local + 1)
+    // y la cambia en caliente con setAudioSource(). El audio es solo
+    // salida: no afecta al lockstep ni a los hashes.
+    this.audioSource = typeof opts.audioSource === 'number' ? opts.audioSource : 5;
     this.Module = null;
     this.ccall = null;
     this.running = false;
@@ -246,7 +256,7 @@ class DualPlayer {
     this.Module._free(ptr);
     if (rc !== 0) throw new Error('mgs_load_rom devolvió ' + rc);
     c('mgs_reset_sio', null, [], []);
-    c('mgs_set_audio_source', null, ['number'], [5]); // mezcla de todos
+    c('mgs_set_audio_source', null, ['number'], [this.audioSource]);
   }
 
   // ---------- bucle principal ----------
@@ -669,7 +679,7 @@ class DualPlayer {
 
   _keyDown(e) {
     if (this._typingInField(e)) return;
-    const mask = KEYBOARD_MAP[e.code];
+    const mask = this.keyMap[e.code];
     if (mask !== undefined) {
       this.kbKeys |= mask;
       this.localKeys = this.kbKeys | this.touchKeys;
@@ -679,7 +689,7 @@ class DualPlayer {
 
   _keyUp(e) {
     if (this._typingInField(e)) return;
-    const mask = KEYBOARD_MAP[e.code];
+    const mask = this.keyMap[e.code];
     if (mask !== undefined) {
       this.kbKeys &= ~mask;
       this.localKeys = this.kbKeys | this.touchKeys;
@@ -695,6 +705,31 @@ class DualPlayer {
   setTouchKeys(mask) {
     this.touchKeys = mask;
     this.localKeys = this.kbKeys | this.touchKeys;
+  }
+
+  // Mapa de teclado reasignado desde el panel «Controles» de la página
+  // ({ codigoDeTecla: mascara }). Sustituye al activo y suelta las
+  // teclas físicas que estuvieran mantenidas, para que ninguna quede
+  // pegada con el mapa viejo; la parte táctil no se toca.
+  setKeyMap(map) {
+    if (map && typeof map === 'object') this.keyMap = map;
+    this.kbKeys = 0;
+    this.localKeys = this.touchKeys;
+  }
+
+  // Fuente de audio del puente en caliente: 5 = mezcla de todos los
+  // jugadores, 1–4 = solo ese jugador (índice + 1), 0 = mudo. Es solo
+  // salida de audio (la mezcla no entra en el estado ni en los hashes),
+  // así que cambiarla no toca el lockstep. La cola se vacía para que el
+  // cambio se oiga al momento y no queden restos de la otra fuente.
+  setAudioSource(n) {
+    this.audioSource = n;
+    if (!this.Module || !this.ready) return;
+    try { this.ccall('mgs_set_audio_source', null, ['number'], [n]); } catch (e) { /* puente caído */ }
+    this._aqL = [];
+    this._aqR = [];
+    this._aqRead = 0;
+    this._aqPos = 0;
   }
 
   pause() { this.paused = true; this.pauseReason = 'remote'; this._send({ dual: true, kind: 'pause', player: this.localIndex }); this._emit('paused', { by: this.localIndex }); }
@@ -723,11 +758,23 @@ class DualPlayer {
     } catch (e) { /* vídeo best-effort: nunca debe romper el bucle */ }
   }
 
+  _bridgeRate() {
+    try {
+      if (!this.Module) return 0;
+      const r = this.ccall('mgs_get_audio_rate', 'number', [], []);
+      return (typeof r === 'number' && r > 0) ? r : 0;
+    } catch (e) { return 0; }
+  }
+
   _initAudio() {
     if (typeof window === 'undefined' || !window.AudioContext) return;
     try {
+      // La tasa real la da el puente: el núcleo GBA puede ir a 65536 Hz
+      // según el juego (Kirby pone SOUNDBIAS a resolución 1). Nunca
+      // asumir 32768: el drenaje remuestrea desde esta tasa.
+      this._srcRate = this._bridgeRate() || AUDIO_SRC_RATE;
       const AC = window.AudioContext || window.webkitAudioContext;
-      this.audioCtx = new AC({ sampleRate: AUDIO_SRC_RATE });
+      this.audioCtx = new AC({ sampleRate: this._srcRate });
       if (this.audioCtx.resume) this.audioCtx.resume();
       const node = this.audioCtx.createScriptProcessor(4096, 0, 2);
       node.onaudioprocess = (ev) => this._drainAudio(ev);
@@ -749,6 +796,13 @@ class DualPlayer {
   _pumpAudio() {
     if (!this.audioCtx || !this.Module) return;
     try {
+      // La tasa puede cambiar en mitad del juego (SOUNDBIAS); la cola
+      // vieja es de otra tasa y se descarta.
+      const rate = this._bridgeRate();
+      if (rate && rate !== this._srcRate) {
+        this._srcRate = rate;
+        this._aqL = []; this._aqR = []; this._aqRead = 0; this._aqPos = 0;
+      }
       const ptr = this.ccall('mgs_get_audio', 'number', [], []);
       const n = this.ccall('mgs_audio_frames', 'number', [], []);
       if (!ptr || n <= 0) return;
@@ -758,7 +812,7 @@ class DualPlayer {
         this._aqR.push(s16[i * 2 + 1] / 32768);
       }
       // Tope ~1,5 s de cola: si el drenaje va por detrás, soltar lo viejo.
-      const maxQ = AUDIO_SRC_RATE * 3 / 2;
+      const maxQ = (this._srcRate || AUDIO_SRC_RATE) * 3 / 2;
       if (this._aqL.length - this._aqRead > maxQ) {
         const drop = (this._aqL.length - this._aqRead) - maxQ;
         this._aqRead += drop;
@@ -774,8 +828,8 @@ class DualPlayer {
   _drainAudio(ev) {
     const outL = ev.outputBuffer.getChannelData(0);
     const outR = ev.outputBuffer.getChannelData(1);
-    const rate = this.audioCtx ? this.audioCtx.sampleRate : AUDIO_SRC_RATE;
-    const step = AUDIO_SRC_RATE / rate;
+    const rate = this.audioCtx ? this.audioCtx.sampleRate : (this._srcRate || AUDIO_SRC_RATE);
+    const step = (this._srcRate || AUDIO_SRC_RATE) / rate;
     if (this._aqPos === undefined) this._aqPos = 0;
     for (let i = 0; i < outL.length; i++) {
       const pos = this._aqPos;
