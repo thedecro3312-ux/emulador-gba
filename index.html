@@ -791,6 +791,7 @@
           <button class="btn" id="btn-restart" type="button" disabled>Reiniciar</button>
           <button class="btn" id="btn-sound" type="button" disabled>Sonido: sí</button>
           <button class="btn" id="btn-ff" type="button" disabled>Avance rápido</button>
+          <button class="btn" id="btn-perf" type="button" disabled>Rendimiento: sí</button>
           <button class="btn" id="btn-fs" type="button" disabled>Pantalla completa</button>
         </div>
       </section>
@@ -1047,6 +1048,37 @@
     var emuStarted = false;
     var paused = false;
     var ffOn = false;
+
+    /* ---------- Modo rendimiento (Solo, núcleo mGBA) ----------
+       Un juego exigente iba lento y con el sonido mal en
+       el POCO F7: el núcleo corre en un solo hilo y, si no termina
+       el cuadro en ~16 ms, el audio se entrecorta (el sonido lo
+       marca el propio núcleo). Con el salto de fotogramas fijo del
+       núcleo (mgba_frameskip=fixed_interval, intervalo 1) el juego
+       dibuja 30 imágenes/s pero la emulación y el audio siguen a
+       velocidad completa y sin cortes. Valores confirmados en el
+       propio núcleo vendorizado (mgba_libretro.wasm):
+       mgba_frameskip admite disabled | auto | auto_threshold |
+       fixed_interval (por defecto disabled); auto y auto_threshold
+       necesitan que el frontal informe de la ocupación del búfer
+       de audio y EmulatorJS no lo implementa, así que solo
+       fixed_interval funciona aquí. Se guarda en localStorage
+       (clave de abajo) y se aplica al arrancar el juego; el botón
+       «Rendimiento» lo enciende/apaga sin tocar nada más. */
+    var PERF_STORAGE_KEY = "emulador-gba-perf-mode-v1";
+    var perfMode = true;
+    try {
+      var _perfStored = window.localStorage ? window.localStorage.getItem(PERF_STORAGE_KEY) : null;
+      if (_perfStored === "off") perfMode = false;
+      else if (_perfStored === "on") perfMode = true;
+    } catch (e) {}
+    function perfLabel() { return perfMode ? "Rendimiento: sí" : "Rendimiento: no"; }
+    function syncPerfButton() {
+      var b = $("btn-perf");
+      if (!b) return;
+      b.textContent = perfLabel();
+      b.classList.toggle("active", perfMode);
+    }
 
     /* ---------- Biblioteca ---------- */
     function renderLibrary(roms) {
@@ -1640,6 +1672,14 @@
       // (COOP/COEP + SharedArrayBuffer), que el alojamiento público no
       // ofrece; el núcleo clásico (legacy) es el que debe arrancar.
       window.EJS_threads = false;
+      // Modo rendimiento (ver la nota junto a perfMode): salto de
+      // fotogramas fijo del núcleo mGBA. Los ajustes guardados de
+      // este juego en este navegador mandan sobre estos valores por
+      // defecto, así que si ya se tocó el frameskip en el menú de
+      // ajustes (engranaje) se respeta esa elección.
+      window.EJS_defaultOptions = perfMode
+        ? { mgba_frameskip: "fixed_interval", mgba_frameskip_interval: "1" }
+        : { mgba_frameskip: "disabled" };
       // Mapeo pedido: flechas=cruceta, X=A, Z=B, Enter=Start, Shift=Select, A/S=L/R.
       // OJO: EJS_defaultControls REEMPLAZA por completo los controles
       // internos de EmulatorJS, y su setupKeys() recorre los jugadores
@@ -1747,6 +1787,7 @@
         $("screen-loading").hidden = true;
         $("screen-error").hidden = true;
         enableTransport(true);
+        syncPerfButton();
         // Sin pantalla táctil, el mando virtual de EmulatorJS no debe
         // aparecer sobre el juego (en PC se juega con el teclado). El
         // CSS de body.no-touch lo mantiene apagado aunque un ajuste
@@ -1786,7 +1827,7 @@
       location.reload();
     }
     function enableTransport(on) {
-      ["btn-pause", "btn-restart", "btn-sound", "btn-ff", "btn-fs"].forEach(function (id) {
+      ["btn-pause", "btn-restart", "btn-sound", "btn-ff", "btn-perf", "btn-fs"].forEach(function (id) {
         $(id).disabled = !on;
       });
       refreshStateSlots();
@@ -1863,6 +1904,27 @@
       e.gameManager.toggleFastForward(ffOn ? 1 : 0);
       this.classList.toggle("active", ffOn);
       toast(ffOn ? "Avance rápido activado." : "Velocidad normal.");
+    });
+    /* ---------- Modo rendimiento: botón «Rendimiento» ----------
+       Enciende/apaga el salto de fotogramas del núcleo (ver la
+       nota junto a perfMode). Se guarda y se aplica al arrancar
+       el próximo juego; si hay partida en curso se intenta además
+       en caliente (el núcleo mGBA re-lee sus opciones en cada
+       cuadro), sin prometerlo: si no se nota el cambio, basta
+       reiniciar el juego. No toca Dual, teclado, controles
+       táctiles, pantalla completa ni «Solo mi pantalla». */
+    $("btn-perf").addEventListener("click", function () {
+      perfMode = !perfMode;
+      try { if (window.localStorage) window.localStorage.setItem(PERF_STORAGE_KEY, perfMode ? "on" : "off"); } catch (e) {}
+      syncPerfButton();
+      try {
+        var e = emu();
+        if (e && e.gameManager && typeof e.gameManager.setVariable === "function") {
+          e.gameManager.setVariable("mgba_frameskip", perfMode ? "fixed_interval" : "disabled");
+          e.gameManager.setVariable("mgba_frameskip_interval", "1");
+        }
+      } catch (e2) {}
+      toast(perfMode ? "Rendimiento activado: imagen a 30 fps y sonido más estable." : "Rendimiento desactivado: imagen a 60 fps.");
     });
     /* ---------- Pantalla completa (PC y Android, Solo y Dual) ----------
        Se pone en pantalla completa el MARCO del juego (.screen-bezel),
@@ -3308,6 +3370,7 @@
     applyDualTouchPos();
     applyDualModeUI();
     fitDualTouchBottom();
+    syncPerfButton();
 
     /* ---------- Arranque ---------- */
     refreshLibrary().then(function () {
