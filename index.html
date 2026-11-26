@@ -439,6 +439,11 @@
       .touch-tools[hidden] { display: none; }
       .touch-edit-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
       .touch-edit-bar[hidden] { display: none; }
+      /* .btn fija display: inline-block y eso derrota el [hidden]
+         del agente de usuario: sin esta regla «Editar botones»
+         seguía visible (y recibía el toque) durante el modo de
+         edición, justo debajo de la cruceta. */
+      #touch-edit-btn[hidden] { display: none; }
       .touch-edit-hint { font-size: 13px; color: #cfc9f5; }
       /* Con posiciones propias, el área táctil Dual pasa a escenario
          relativo y cada unidad (cruceta entera y cada botón) se coloca
@@ -526,7 +531,15 @@
           display: flex; align-items: flex-end; justify-content: space-between;
         }
         body.editing-touch .dual-touch { bottom: 96px; }
-        .dual-touch.touch-free { height: auto !important; display: block; }
+        /* En táctil el modo libre sigue siendo el área superpuesta
+           (position: absolute): sin esto manda el position: relative
+           de la regla base y, con height: auto, el área colapsa a
+           la altura del relleno (~10 px); los top en % de todas las
+           unidades se resolvían contra esos ~10 px, se apilaban
+           unas sobre otras y la validación descartaba el guardado
+           en cada entrada al modo de edición. Con absolute, height:
+           auto se estira entre top: 0 y bottom (52/96 px). */
+        .dual-touch.touch-free { position: absolute; height: auto !important; display: block; }
         .dual-touch .dual-dpad, .dual-touch .dual-btns { pointer-events: auto; }
         .dual-touch .dual-btns > .dt-btn { pointer-events: auto; }
         .dual-touch .dt-btn { background: rgba(10, 6, 40, .55); }
@@ -2712,6 +2725,7 @@
       dualSetStatus("Cargando el núcleo Dual…");
       applyDualView();
       applyDualTouchPos();
+      fitDualTouchBottom();
       applyDualChrome();
       refreshStateSlots();
       // Modo humo: sin conexión, el juego se ve corriendo de inmediato.
@@ -3054,7 +3068,21 @@
     // se reaplican (y la red de seguridad vuelve a pasar).
     window.addEventListener("resize", function () {
       if (dualTouchPos && !$("dual-touch").hidden) applyDualTouchPos();
+      fitDualTouchBottom();
     });
+    /* La franja de «Editar botones» no mide siempre 96 px: en
+       edición la barra (pista + Restablecer + Listo) envuelve a
+       varias líneas y es más alta, así que el área táctil debe
+       dejar libre su altura real medida, no un número fijo; si no,
+       la cruceta (abajo a la izquierda) cae encima de la fila de
+       «Editar botones». Se mide tras cada cambio de la barra. */
+    function fitDualTouchBottom() {
+      var dt = $("dual-touch");
+      if (!dt || dt.hidden) return;
+      var tools = $("touch-tools");
+      var h = tools ? tools.offsetHeight : 0;
+      dt.style.bottom = h ? (h + 12) + "px" : "";
+    }
     // Primera vez que se edita sin posiciones guardadas: se «congela»
     // la posición actual de cada unidad (la del flex de siempre) como
     // punto de partida, para que nada salte al entrar en el modo libre.
@@ -3166,6 +3194,11 @@
     // a los manejadores de pulsación de los botones.
     $("dual-touch").addEventListener("pointerdown", function (ev) {
       if (!touchEditing || touchEditTarget !== "dual") return;
+      // Si por cualquier vía se está editando sin modo libre (p. ej.
+      // un restablecimiento previo), congelar el reparto actual
+      // antes de empezar: sin touch-free, left/top no mueven nada
+      // porque la cruceta y los botones son hijos estáticos del flex.
+      if (!$("dual-touch").classList.contains("touch-free")) dualTouchSnapshot();
       var btn = ev.target && ev.target.closest ? ev.target.closest(".dual-btns > .dt-btn") : null;
       if (btn) { beginDrag("dual", btn.getAttribute("data-key"), btn, ev); return; }
       var dpad = ev.target && ev.target.closest ? ev.target.closest(".dual-dpad") : null;
@@ -3203,6 +3236,12 @@
         touchEditTarget = "dual";
         if (!dualTouchPos) dualTouchSnapshot();
         else applyDualTouchPos();
+        // Si la validación descartó el guardado (posiciones que se
+        // pisaban), applyDualTouchPos deja el área en flex: entrar
+        // así al modo de edición dejaba el arrastre muerto. Volver
+        // a congelar el reparto por defecto para entrar siempre en
+        // modo libre.
+        if (!dualTouchPos) dualTouchSnapshot();
       } else {
         var e = emu();
         if (!e || !emuRunning) {
@@ -3219,6 +3258,7 @@
       document.body.classList.add("editing-touch");
       $("touch-edit-bar").hidden = false;
       $("touch-edit-btn").hidden = true;
+      fitDualTouchBottom();
     }
     function exitTouchEdit() {
       if (dragState) onDragEnd();
@@ -3227,6 +3267,7 @@
       document.body.classList.remove("editing-touch");
       $("touch-edit-bar").hidden = true;
       $("touch-edit-btn").hidden = false;
+      fitDualTouchBottom();
     }
     $("touch-edit-btn").addEventListener("click", enterTouchEdit);
     $("touch-done-btn").addEventListener("click", function () {
@@ -3238,6 +3279,9 @@
         dualTouchPos = null;
         storeJson(DUAL_TOUCH_POS_KEY, null);
         applyDualTouchPos();
+        // Seguir editando en flex dejaría el arrastre muerto (ver
+        // enterTouchEdit): congelar el reparto por defecto.
+        if (touchEditing) dualTouchSnapshot();
       } else if (touchEditTarget === "solo") {
         soloTouchPos = {};
         storeJson(SOLO_TOUCH_POS_KEY, null);
@@ -3263,6 +3307,7 @@
     applyDualView();
     applyDualTouchPos();
     applyDualModeUI();
+    fitDualTouchBottom();
 
     /* ---------- Arranque ---------- */
     refreshLibrary().then(function () {
