@@ -427,9 +427,14 @@
       .dual-actions #dual-view-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 
       /* ---------- Botones táctiles: barra de edición y modo libre ---------- */
+      /* La barra de edición va en su propia franja bajo el área táctil
+         y POR ENCIMA de ella (z-index mayor que el de #dual-touch):
+         ningún botón táctil, ni siquiera con una posición guardada
+         mala, puede taparla ni robarle el clic. */
       .touch-tools {
         display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
         padding-top: 12px;
+        position: relative; z-index: 12;
       }
       .touch-tools[hidden] { display: none; }
       .touch-edit-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -525,7 +530,58 @@
         .dual-touch .dual-dpad, .dual-touch .dual-btns { pointer-events: auto; }
         .dual-touch .dual-btns > .dt-btn { pointer-events: auto; }
         .dual-touch .dt-btn { background: rgba(10, 6, 40, .55); }
+        /* Sin posiciones guardadas, el grupo de botones se reparte en
+           tres filas fijas (L R / B A / Select Start) del ancho de la
+           fila mayor: así ningún botón pisa a otro ni se sale por los
+           bordes, en vertical ni en horizontal. */
+        .dual-touch .dual-btns { width: 136px; align-content: flex-end; }
       }
+
+      /* ---------- Toque inmediato y sin selección de texto ----------
+         En Android el WebView puede comerse el primer toque (retardo
+         de doble toque / primer toque «de foco») y una pulsación
+         larga selecciona el texto del botón como si fuera una página
+         cualquiera. Por eso TODOS los botones llevan
+         touch-action: manipulation (sin retardo de doble toque) y
+         user-select/-webkit-touch-callout en none (sin selección ni
+         menú de copiar al dejar presionado), igual que la zona de
+         juego y la interfaz del emulador; el disparo en touchstart
+         de los botones de acción y el bloqueo del menú contextual
+         van en el script (bloque «TOQUE INMEDIATO»). Los controles
+         del juego van más lejos: touch-action: none para que
+         mantenerlos no desplace ni haga zoom — la cruceta y los
+         botones Dual ya lo traían en su regla; aquí se extiende al
+         mando virtual de EmulatorJS (Solo), que la librería crea
+         dentro de #game con su propio CSS. */
+      button, .btn, .back-sala {
+        touch-action: manipulation;
+        user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      }
+      .console, .screen, #game {
+        user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      }
+      .dual-touch { -webkit-touch-callout: none; }
+      .dual-dpad, .dual-btns { touch-action: none; }
+      .dt-btn { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+      #game .ejs_virtualGamepad_parent,
+      #game .ejs_virtualGamepad_button,
+      #game .b_dpad {
+        touch-action: none !important;
+        user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      }
+
+      /* ---------- Sin pantalla táctil: ningún control táctil ----------
+         En un PC sin táctil (pointer: fine y sin puntos de contacto)
+         los controles táctiles no existen: ni se ven, ni ocupan
+         espacio, ni interceptan clics. El script marca el cuerpo con
+         .no-touch al detectar que no hay tacto (pointer: coarse,
+         'ontouchstart' o maxTouchPoints); en cuanto hay tacto, estas
+         reglas no aplican y todo queda como siempre. El !important
+         gana también al display en línea del mando virtual de
+         EmulatorJS. */
+      body.no-touch .dual-touch,
+      body.no-touch .touch-tools,
+      body.no-touch #game .ejs_virtualGamepad_parent { display: none !important; }
 
       /* ---------- Pantalla completa (contenedor del juego) ----------
          Se pone en pantalla completa el marco (.screen-bezel), no solo
@@ -600,12 +656,17 @@
       body.fs-fallback .screen-bezel.dual-solo .dual-side .dual-remote,
       .screen-bezel:fullscreen.dual-solo .dual-side .dual-status,
       body.fs-fallback .screen-bezel.dual-solo .dual-side .dual-status { display: none; }
-      /* En pantalla completa no se editan botones: la barra de edición
-         no roba altura al juego (se vuelve a ella al salir). */
-      .screen-bezel:fullscreen .touch-tools,
-      body.fs-fallback .screen-bezel .touch-tools { display: none; }
+      /* En pantalla completa la barra de «Editar botones» SÍ se queda
+         (en su franja, bajo el área táctil): es la única puerta al
+         modo de edición y tiene que ser alcanzable siempre, también
+         a pantalla completa. Solo existe en aparatos táctiles: en PC
+         va con hidden y, además, body.no-touch la apaga arriba. El
+         área táctil deja libre esa franja igual que fuera de la
+         pantalla completa (y más si se está editando). */
       .screen-bezel:fullscreen .dual-touch,
-      body.fs-fallback .screen-bezel .dual-touch { bottom: 0; }
+      body.fs-fallback .screen-bezel .dual-touch { bottom: 52px; }
+      body.editing-touch .screen-bezel:fullscreen .dual-touch,
+      body.editing-touch.fs-fallback .screen-bezel .dual-touch { bottom: 96px; }
 
       /* ---------- Pantalla completa por CSS (respaldo, punto 1) ----------
          Cuando el WebView no admite la Fullscreen API, el cuerpo toma
@@ -794,8 +855,9 @@
           <p class="ctl-msg" id="ctl-msg" role="status" aria-live="polite" hidden></p>
           <div class="ctl-actions">
             <button class="btn ghost small" id="ctl-reset" type="button">Restablecer</button>
+            <button class="btn ghost small" id="touch-pos-reset" type="button">Restablecer posiciones táctiles</button>
           </div>
-          <p class="note">Los botones L y R quedan fijos en <kbd>A</kbd> y <kbd>S</kbd>. En el modo Dual, la barra espaciadora y el otro Shift también valen como Select. En el móvil aparecen controles táctiles sobre la pantalla: con el botón «Editar botones», justo bajo la pantalla, puedes arrastrarlos a otra posición. También puedes conectar un mando desde el engranaje de ajustes de la barra del reproductor (modo Solo).</p>
+          <p class="note">Los botones L y R quedan fijos en <kbd>A</kbd> y <kbd>S</kbd>. En el modo Dual, la barra espaciadora y el otro Shift también valen como Select. En el móvil aparecen controles táctiles sobre la pantalla: con el botón «Editar botones», justo bajo la pantalla, puedes arrastrarlos a otra posición. Si alguna vez quedan mal colocados y no alcanzas ese botón, «Restablecer posiciones táctiles» los devuelve a su sitio sin entrar en el modo de edición. También puedes conectar un mando desde el engranaje de ajustes de la barra del reproductor (modo Solo).</p>
         </section>
       </div>
 
@@ -863,6 +925,18 @@
 
     /* ---------- Utilidades ---------- */
     function $(id) { return document.getElementById(id); }
+    /* ---------- ¿Hay pantalla táctil? ----------
+       Detección real de tacto: puntero grueso (pointer: coarse), el
+       evento táctil clásico o puntos de contacto declarados. Sin
+       tacto (el PC de siempre), el cuerpo queda marcado .no-touch y
+       el CSS esconde por completo los controles táctiles (cruceta y
+       botones Dual, mando virtual de Solo y barra «Editar botones»):
+       ni se ven, ni ocupan espacio, ni interceptan clics. Con tacto
+       (Android, o un PC con pantalla táctil) no cambia nada. */
+    var IS_TOUCH = false;
+    try { IS_TOUCH = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (e) {}
+    if (!IS_TOUCH) IS_TOUCH = ("ontouchstart" in window) || ((navigator.maxTouchPoints || 0) > 0);
+    document.body.classList.add(IS_TOUCH ? "has-touch" : "no-touch");
     var toastTimer = null;
     function toast(msg) {
       var t = $("toast");
@@ -1660,6 +1734,14 @@
         $("screen-loading").hidden = true;
         $("screen-error").hidden = true;
         enableTransport(true);
+        // Sin pantalla táctil, el mando virtual de EmulatorJS no debe
+        // aparecer sobre el juego (en PC se juega con el teclado). El
+        // CSS de body.no-touch lo mantiene apagado aunque un ajuste
+        // guardado de la librería lo volviera a encender.
+        if (!IS_TOUCH) {
+          var e0 = emu();
+          if (e0 && typeof e0.toggleVirtualGamepad === "function") e0.toggleVirtualGamepad(false);
+        }
         refreshStateSlots();
         // El teclado de EmulatorJS escucha SOLO en el contenedor del
         // juego (#game): si el foco queda en el cuerpo de la página o en
@@ -2616,7 +2698,10 @@
       $("screen-error").hidden = true;
       $("screen").hidden = true;
       $("screen-dual").hidden = false;
-      $("dual-touch").hidden = false;
+      // Los controles táctiles Dual solo existen si hay tacto: en un
+      // PC sin pantalla táctil no se muestran nunca (el CSS de
+      // body.no-touch los apaga además por si acaso).
+      $("dual-touch").hidden = !IS_TOUCH;
       $("dual-desync").hidden = true;
       $("power-led").classList.add("on");
       $("now-playing").textContent = rom.name;
@@ -2788,6 +2873,58 @@
     })();
 
     /* ============================================================
+       TOQUE INMEDIATO Y SIN MENÚ DE PULSACIÓN LARGA (Android)
+       Los botones de acción escuchan «click», y en el WebView de
+       Android ese primer toque puede perderse (retardo de doble
+       toque, primer toque que solo da foco): había que picar dos
+       veces. Aquí los <button> de acción disparan en touchstart,
+       con preventDefault para que el click nativo no se repita
+       después; por si algún WebView lo dispara igual, el click que
+       llegue justo después sobre el mismo botón se traga en
+       captura. El CSS (touch-action: manipulation) quita además el
+       retardo de doble toque.
+       Fuera de este atajo, a propósito:
+       - Los controles del juego: la cruceta y los botones Dual ya
+         actúan en pointerdown y deben MANTENER la entrada mientras
+         se dejan presionados (la suma teclado + tacto de las 00:03
+         no se toca); los de EmulatorJS en #game los escucha la
+         propia librería en su touchstart.
+       - Las etiquetas <label class="btn"> que abren el selector de
+         archivos: su activación nativa es la que abre el selector
+         en Android; un click programático podría no abrirlo.
+       - El modo «Editar botones»: su arrastre va por pointer
+         events en captura y no debe disparar acciones.
+       Y la pulsación larga no abre el menú contextual (copiar y
+       demás) sobre ningún botón ni sobre la zona de juego; la
+       selección de texto la apaga el CSS (user-select: none y
+       -webkit-touch-callout: none en botones, consola y #game).
+       ============================================================ */
+    document.addEventListener("touchstart", function (ev) {
+      if (typeof touchEditing !== "undefined" && touchEditing) return;
+      var t = ev.target;
+      var btn = t && t.closest ? t.closest("button") : null;
+      if (!btn || btn.disabled) return;
+      if (btn.closest("#game") || btn.closest("#dual-touch")) return;
+      ev.preventDefault();
+      btn.click();
+      btn.__fastTapAt = Date.now();
+    }, { passive: false });
+    document.addEventListener("click", function (ev) {
+      var t = ev.target;
+      if (t && t.__fastTapAt && Date.now() - t.__fastTapAt < 700) {
+        t.__fastTapAt = 0;
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    }, true);
+    document.addEventListener("contextmenu", function (ev) {
+      var t = ev.target;
+      if (t && t.closest && t.closest("button, .btn, #game, .dual-touch, .touch-tools")) {
+        ev.preventDefault();
+      }
+    });
+
+    /* ============================================================
        BOTONES TÁCTILES MOVIBLES («Editar botones»)
        Modo de edición para arrastrar los botones a otra posición y
        que se quede guardada en este navegador:
@@ -2855,7 +2992,69 @@
         u.el.style.left = p.x + "%";
         u.el.style.top = p.y + "%";
       });
+      validateDualTouchPos();
     }
+    /* Red de seguridad de las posiciones guardadas: se guardaron
+       contra el área táctil de otro momento (otro tamaño, otro modo)
+       y al restaurarlas pueden caer fuera del área —cortadas en un
+       borde o encima de la franja de «Editar botones»— o pisándose
+       unas a otras (B sobre L, A sobre R), dejando el modo de
+       edición inalcanzable. Al aplicarlas se corrige en silencio lo
+       que se sale del área (y se guarda la corrección), y si dos
+       unidades se pisan más de la mitad de la menor, ese guardado
+       está roto: se descarta, vuelve el reparto por defecto y se
+       avisa. Las posiciones buenas no se tocan. */
+    function validateDualTouchPos() {
+      var wrap = $("dual-touch");
+      if (!dualTouchPos || wrap.hidden) return;
+      var wr = wrap.getBoundingClientRect();
+      if (!wr.width || !wr.height) return;
+      var units = dualTouchUnits();
+      var changed = false;
+      units.forEach(function (u) {
+        var r = u.el.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        var nx = r.left - wr.left, ny = r.top - wr.top;
+        var cx = Math.max(0, Math.min(nx, Math.max(0, wr.width - r.width)));
+        var cy = Math.max(0, Math.min(ny, Math.max(0, wr.height - r.height)));
+        if (cx !== nx || cy !== ny) {
+          var px = Math.round((cx / wr.width) * 1000) / 10;
+          var py = Math.round((cy / wr.height) * 1000) / 10;
+          u.el.style.left = px + "%";
+          u.el.style.top = py + "%";
+          if (dualTouchPos[u.id]) { dualTouchPos[u.id].x = px; dualTouchPos[u.id].y = py; }
+          changed = true;
+        }
+      });
+      var rects = [];
+      units.forEach(function (u) {
+        var r = u.el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) rects.push(r);
+      });
+      var broken = false;
+      for (var i = 0; i < rects.length && !broken; i++) {
+        for (var j = i + 1; j < rects.length; j++) {
+          var a = rects[i], b = rects[j];
+          var ox = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+          var oy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+          var minArea = Math.min(a.width * a.height, b.width * b.height);
+          if (minArea > 0 && ox * oy > minArea * 0.5) { broken = true; break; }
+        }
+      }
+      if (broken) {
+        dualTouchPos = null;
+        storeJson(DUAL_TOUCH_POS_KEY, null);
+        applyDualTouchPos();
+        toast("Las posiciones guardadas de los botones táctiles se pisaban entre sí y se restablecieron.");
+        return;
+      }
+      if (changed) storeJson(DUAL_TOUCH_POS_KEY, dualTouchPos);
+    }
+    // Al girar el aparato o cambiar el tamaño, las posiciones en %
+    // se reaplican (y la red de seguridad vuelve a pasar).
+    window.addEventListener("resize", function () {
+      if (dualTouchPos && !$("dual-touch").hidden) applyDualTouchPos();
+    });
     // Primera vez que se edita sin posiciones guardadas: se «congela»
     // la posición actual de cada unidad (la del flex de siempre) como
     // punto de partida, para que nada salte al entrar en el modo libre.
@@ -3046,13 +3245,21 @@
       }
       toast("Posiciones restablecidas.");
     });
+    // Salida de emergencia, fuera del modo de edición: el panel
+    // «Controles» siempre se alcanza, así que desde ahí se pueden
+    // restablecer las posiciones táctiles (Dual y Solo) aunque los
+    // botones guardados tapen el «Editar botones».
+    $("touch-pos-reset").addEventListener("click", function () {
+      dualTouchPos = null;
+      storeJson(DUAL_TOUCH_POS_KEY, null);
+      applyDualTouchPos();
+      soloTouchPos = {};
+      storeJson(SOLO_TOUCH_POS_KEY, null);
+      applySoloTouchPos();
+      toast("Posiciones de los botones táctiles restablecidas.");
+    });
     // La barra de edición solo tiene sentido con pantalla táctil.
-    (function () {
-      var isTouch = false;
-      try { isTouch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches; } catch (e) {}
-      if (!isTouch) isTouch = "ontouchstart" in window || (navigator.maxTouchPoints || 0) > 0;
-      if (isTouch) $("touch-tools").hidden = false;
-    })();
+    if (IS_TOUCH) $("touch-tools").hidden = false;
     applyDualView();
     applyDualTouchPos();
     applyDualModeUI();
