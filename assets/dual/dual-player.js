@@ -14,7 +14,9 @@
  *    no corre más de 30 cuadros por delante del ack más bajo (~500 ms de
  *    tolerancia a acks; con 12 el juego se congelaba en cada ráfaga de
  *    latencia del móvil y los botones dejaban de responder hasta que
- *    volvían los acks).
+ *    volvían los acks). El RITMO lo marca el reloj real (FRAME_MS):
+ *    como mucho 1 cuadro por cada 16,67 ms, sin importar la frecuencia
+ *    de la pantalla; sin ese freno, en 120/144 Hz el juego se aceleraba.
  *  - Handshake: dual-hello (host) -> dual-ready (invitado) -> dual-start.
  *  - Hash de estado cada 60 cuadros (jugador 0) y cada 300 (todos). Ante
  *    desync: ambos paran y se muestra cuadro + jugador + hashes, con
@@ -42,6 +44,16 @@ const MAX_AHEAD_FRAMES = 30;     // backpressure: cuánto puede adelantarse el h
 const HASH_EVERY_FRAMES = 60;    // hash del jugador 0 cada N cuadros
 const HASH_ALL_EVERY_FRAMES = 300; // hash de todos los jugadores cada N cuadros
 const LATE_INPUT_LIMIT = 30;     // inputs tardíos seguidos antes de pausar y avisar
+const FRAME_MS = 1000 / 60;      // ritmo real del juego: 1 cuadro cada 16,67 ms de reloj.
+// El bucle Dual NO tenía freno de reloj: avanzaba 1 cuadro por rAF, así
+// que en pantallas de 120/144 Hz el juego corría a 2x/2,4x. La única
+// contención era la ventana MAX_AHEAD (con 12 el host se congelaba tanto
+// que el ritmo medio quedaba cerca de 60; con 30 dejó de frenar y el juego
+// se aceleró). El ritmo lo marca este acumulador, no el rAF ni los acks:
+// como mucho 1 cuadro por cada FRAME_MS de reloj real, y como mucho 1
+// cuadro por rAF. La ventana de 30 se queda (tolerancia a acks), pero ya
+// no puede acelerar el juego. El invitado aplica los ticks al llegar
+// (por diseño: así se pone al día tras un parón); el host marca el ritmo.
 const LEAVE_GRACE_MS = 10_000;   // gracia tras cierre de conexión antes de detach
 const RESYNC_CHUNK = 16 * 1024;  // bytes por chunk en la resincronización
 const AUDIO_SRC_RATE = 32768;    // Hz del audio del puente (estéreo s16)
@@ -127,6 +139,8 @@ class DualPlayer {
     this.resync = null;                          // estado de resincronización (host)
     this.resyncIn = null;                        // estado de resincronización (invitado)
     this.departed = new Set();                   // jugadores que salieron (cable desconectado)
+    this._paceAcc = 0;                           // acumulador de ritmo real (ms)
+    this._paceLast = 0;                          // performance.now() del rAF anterior
     this._keyDown = this._keyDown.bind(this);
     this._keyUp = this._keyUp.bind(this);
     this._onConnData = this._onConnData.bind(this);
@@ -150,6 +164,8 @@ class DualPlayer {
     this.localIndex = opts.localPlayerIndex !== null && opts.localPlayerIndex !== undefined
       ? opts.localPlayerIndex : (this.isHost ? 0 : 1);
     this.frame = 0;
+    this._paceAcc = 0;
+    this._paceLast = 0;
     this.localKeys = 0;
     this.kbKeys = 0;
     this.touchKeys = 0;
@@ -277,6 +293,23 @@ class DualPlayer {
   _loop() {
     if (!this.running) return;
     if (this.paused) { this.rafId = requestAnimationFrame(() => this._loop()); return; }
+    // Ritmo real (FRAME_MS): como mucho 1 cuadro por cada 16,67 ms de
+    // reloj, y como mucho 1 cuadro por rAF. Sin esto, en pantallas de
+    // 120/144 Hz el juego corría a 2x/2,4x (el rAF era el único reloj).
+    // El acumulador se limita a 2 cuadros: tras un parón (pausa,
+    // backpressure, pestaña en segundo plano) no se "pone al día" en
+    // ráfaga, simplemente reanuda a velocidad real.
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (this._paceLast > 0) {
+      this._paceAcc += now - this._paceLast;
+      if (this._paceAcc > 2 * FRAME_MS) this._paceAcc = 2 * FRAME_MS;
+    }
+    this._paceLast = now;
+    if (this._paceAcc < FRAME_MS) {
+      this.rafId = requestAnimationFrame(() => this._loop());
+      return;
+    }
+    this._paceAcc -= FRAME_MS;
     // Backpressure (solo con invitado): no correr más de MAX_AHEAD
     // cuadros por delante del ack más bajo. Los jugadores que salieron
     // no cuentan: si no, el host se quedaría esperando acks que nunca
