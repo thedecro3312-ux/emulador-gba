@@ -3709,6 +3709,19 @@
       }
       refreshStateSlots();
     });
+
+    /* ---------- Service Worker (jugar sin internet en la app) ---------- */
+    /* La página en vivo corre bajo https://thedecro3312-ux.github.io :
+       el SW guarda el emulador en caché bajo ese mismo origen, así que
+       sin internet la app puede servir la página en vivo desde la caché
+       y la biblioteca (IndexedDB) y los ajustes (localStorage) son los
+       mismos que en línea. En file:// no hay Service Worker: el registro
+       falla en silencio y nada cambia. */
+    try {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js').catch(function () { /* sin SW: todo sigue igual */ });
+      }
+    } catch (e) { /* contextos sin SW (file://, WebView viejo): nada cambia */ }
     </script>
   </body>
 </html>
