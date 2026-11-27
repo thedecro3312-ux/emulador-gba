@@ -24,7 +24,7 @@
    no se sube, el SW seguiría sirviendo la versión vieja.
    ============================================================ */
 
-var CACHE = 'emulador-gba-v1';
+var CACHE = 'emulador-gba-v2';
 
 var CORE = [
   './',

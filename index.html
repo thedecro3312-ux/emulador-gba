@@ -376,6 +376,11 @@
       .dual-remote { margin: 0; }
       .dual-remote figcaption { font-size: 12.5px; color: #cfc9f5; margin-top: 4px; }
       .dual-status { margin: 0; font-size: 13.5px; color: #f2f0ff; overflow-wrap: anywhere; }
+      /* Aviso de pestaña en segundo plano (modo Dual): cuando la pestaña
+         de otro jugador no está al frente, sus teclas no llegan al
+         juego — sin este aviso el juego «no responde» sin saberse por qué. */
+      .dual-tab-warn { margin: 0; font-size: 13px; color: #ffd9a0; overflow-wrap: anywhere; }
+      .dual-tab-warn[hidden] { display: none; }
       /* Aviso de espera visible también en pantalla completa: el estado
          Dual (.dual-status) se oculta a pantalla completa, así que
          cuando el juego se congela esperando al otro jugador el
@@ -833,8 +838,10 @@
                 <figcaption id="dual-remote-label-3">Jugador 4</figcaption>
               </figure>
               <p class="dual-status" id="dual-status" role="status">Modo Dual: carga un juego para empezar.</p>
+              <p class="dual-tab-warn" id="dual-tab-warn" hidden></p>
               <div class="dual-actions">
                 <button class="btn" id="dual-pause-btn" type="button" disabled>Pausa</button>
+                <button class="btn ghost-dark" id="dual-restart-btn" type="button" disabled>Reiniciar partida</button>
                 <button class="btn ghost-dark" id="dual-view-btn" type="button" aria-pressed="true">Ver ambas pantallas</button>
                 <button class="btn ghost-dark" id="dual-fs-btn" type="button">Pantalla completa</button>
                 <button class="btn ghost-dark" id="dual-exit-btn" type="button">Salir de la partida Dual</button>
@@ -2410,6 +2417,15 @@
       var c = targetConn || conn;
       if (c && c.open) { try { c.send(obj); } catch (e) {} }
     }
+    // Difusión a todos los invitados (anfitrión); el invitado usa mpSend
+    // (su única conexión es al anfitrión).
+    function mpSendAll(obj) {
+      if (mpRole === "host") {
+        for (var i = 0; i < mpGuests.length; i++) mpSend(obj, mpGuests[i].conn);
+      } else {
+        mpSend(obj);
+      }
+    }
     // Latido por conexión: cada 5 s se manda ping a cada invitado y se
     // juzga el silencio por separado (45 s). Invitado: como antes, el
     // silencio tira toda la sala. Anfitrión: el silencio de UN invitado
@@ -2455,6 +2471,13 @@
         mpLastSeen = Date.now();
         for (const g of mpGuests) g.lastSeen = Date.now();
       }
+      // Aviso de pestaña en segundo plano (modo Dual): con dos jugadores
+      // en el mismo Chrome solo la pestaña al frente recibe el teclado;
+      // el otro lado ve el aviso y sabe por qué su juego «no responde».
+      dualSendTabState();
+      if (!document.hidden && dualRunning && dualWithConn) {
+        toast("Tu pestaña está al frente: tus teclas ya llegan al juego.");
+      }
     });
     // Datos de sala (hola/verificado/ping). `c` es la conexión por la
     // que llegó el mensaje (anfitrión: una por invitado; invitado: su
@@ -2499,6 +2522,32 @@
           mpLog("Conectados: " + (entry ? ("el jugador " + (entry.seat + 1) + " confirmó") : "el otro jugador confirmó") + " que tiene el mismo juego. " + (dualMode ? "La partida Dual se sincroniza por lockstep." : "La sincronización dentro de la partida aún no funciona con este núcleo (modo Solo)."));
         } else if (!data.ok && currentGame && data.hash && data.hash !== currentGame.hash) {
           mpLog("El anfitrión confirmó que los juegos no coinciden.");
+        }
+        return;
+      }
+      if (data.t === "dual-tab") {
+        // Otro jugador avisa de que su pestaña está (o deja de estar) en
+        // segundo plano: sus teclas no llegan al juego mientras lo esté.
+        if (data.player !== undefined && data.player !== dualLocalIndex) {
+          if (data.hidden) dualTabHidden[data.player] = true;
+          else delete dualTabHidden[data.player];
+          dualRenderTabWarn();
+        }
+        return;
+      }
+      if (data.t === "dual-restart") {
+        // Otro jugador pidió reiniciar la partida Dual: se recrea el
+        // jugador local con los mismos datos de sala (la sala NO se
+        // destruye) y el anfitrión vuelve a hacer el saludo del cable.
+        if (!dualRestarting && dual && dualRunning && dualWithConn) dualRestartBegin();
+        return;
+      }
+      if (data.t === "dual-restart-ready") {
+        // Un invitado ya recreó su jugador tras un reinicio: el anfitrión
+        // cuenta su asiento para el saludo (ver dualRestartMaybeBegin).
+        if (mpRole === "host" && dualRestarting && data.player !== undefined) {
+          dualRestartAcks[data.player] = true;
+          dualRestartMaybeBegin(false);
         }
         return;
       }
@@ -2921,6 +2970,14 @@
       } else if (type === "started") {
         $("dual-desync").hidden = true;
         $("dual-pause-btn").disabled = false;
+        // La partida corre en este lado (el invitado solo se entera aquí:
+        // dualStarted es lo que habilita «Reiniciar partida» y lo que
+        // impide que entren más jugadores a la sala).
+        dualStarted = true;
+        // Un reinicio (si lo hubo) ya terminó: la partida nueva corre.
+        if (dualRestartTimer) { clearTimeout(dualRestartTimer); dualRestartTimer = null; }
+        dualRestarting = false;
+        dualUpdateRestartButton();
         dualSetStatus(dualWithConn ? "Partida Dual en curso: ¡a jugar!" : "Juego Dual en curso (local).");
         // Que la ficha de la sala también diga que la partida corre
         // (antes quedaba en «Conectado» / «Esperando jugador…»).
@@ -2942,6 +2999,7 @@
         $("dual-pause-btn").textContent = "Pausa";
         dualSetStatus("Partida Dual en curso.");
       } else if (type === "player-left") {
+        if (data.player !== undefined) { delete dualTabHidden[data.player]; dualRenderTabWarn(); }
         dualSetStatus(data.message || "Un jugador se fue: cable desconectado.");
         toast(data.message || "Un jugador se fue.");
       } else if (type === "need-player") {
@@ -2961,6 +3019,119 @@
         dualSetStatus("Error del modo Dual: " + (data.message || "desconocido"));
         toast("Error del modo Dual: " + (data.message || ""));
       }
+    }
+    // ---------- Reinicio de la partida Dual (sin destruir la sala) ----------
+    // Causa: en Kirby, si un jugador entra en modo de 1 jugador (o se
+    // queda esperando el cable porque el otro nunca llegó a la pantalla
+    // del cable), desde el juego no se puede volver al menú multijugador:
+    // la única salida era «Salir de la partida Dual», que destruye la
+    // sala. El reinicio vuelve a crear el jugador local con los mismos
+    // datos de sala (ROM, asientos, conexiones) y el anfitrión repite el
+    // saludo del cable link; la sala, los asientos y el código quedan.
+    var dualRestarting = false;
+    var dualRestartAcks = {};
+    var dualRestartSelfReady = false;
+    var dualRestartTimer = null;
+    function dualUpdateRestartButton() {
+      var b = $("dual-restart-btn");
+      if (b) b.disabled = !(dual && dualRunning && dualWithConn && dualStarted && !dualRestarting);
+    }
+    function dualRestartFail(msg) {
+      if (dualRestartTimer) { clearTimeout(dualRestartTimer); dualRestartTimer = null; }
+      dualRestarting = false;
+      dualUpdateRestartButton();
+      dualSetStatus(msg || "No se pudo reiniciar la partida Dual.");
+      toast(msg || "No se pudo reiniciar la partida Dual.");
+    }
+    function dualRestartArmTimeout() {
+      if (dualRestartTimer) clearTimeout(dualRestartTimer);
+      // Si un invitado no confirma en 10 s (pestaña cerrada o muy lenta),
+      // el anfitrión sigue con el saludo igualmente: quien esté listo
+      // responde al saludo y la partida arranca; el ausente queda fuera
+      // como en el inicio normal.
+      dualRestartTimer = setTimeout(function () { dualRestartMaybeBegin(true); }, 10000);
+    }
+    function dualRestartMaybeBegin(force) {
+      // Solo el anfitrión hace el saludo, y solo cuando su propio jugador
+      // ya está recreado y todos los invitados conectados confirmaron.
+      if (!dualRestarting || mpRole !== "host" || !dualRestartSelfReady || !dual) return;
+      var needed = mpVerifiedGuests().map(function (g) { return g.seat; });
+      if (!force) {
+        for (var i = 0; i < needed.length; i++) {
+          if (!dualRestartAcks[needed[i]]) return;
+        }
+      }
+      if (dualRestartTimer) { clearTimeout(dualRestartTimer); dualRestartTimer = null; }
+      dualRestarting = false;
+      dualUpdateRestartButton();
+      if (dual.beginHandshake() === false) {
+        dualStarted = false;
+        dualRestartFail("El núcleo Dual aún no está listo para reiniciar; pulsa de nuevo «Reiniciar partida».");
+        return;
+      }
+      dualSetStatus("Reiniciando la partida Dual…");
+    }
+    function dualDoRestartRecreate() {
+      var pc = dualPlayerCount, li = dualLocalIndex;
+      var old = dual;
+      dual = null; dualWithConn = false; dualRunning = false;
+      try { if (old) old.stop(); } catch (e) {}
+      // La conexión de sala NO se toca: el jugador nuevo se ata a la
+      // misma (anfitrión: guestConns verificados; invitado: su conn).
+      if (mpRole === "host") {
+        dualCreatePlayer(true, { playerCount: pc, guestConns: mpVerifiedGuests() }).then(function (ok) {
+          if (!ok || !dual) { dualRestartFail(); return; }
+          dualRestartSelfReady = true;
+          dualRestartMaybeBegin(false);
+        });
+      } else {
+        dualCreatePlayer(true, { playerCount: pc, localIndex: li, sendReady: true }).then(function (ok) {
+          if (!ok || !dual) { dualRestartFail(); return; }
+          mpSend({ t: "dual-restart-ready", player: li });
+        });
+      }
+    }
+    function dualRestartBegin() {
+      if (dualRestarting) return;
+      dualRestarting = true;
+      dualRestartAcks = {};
+      dualRestartSelfReady = false;
+      dualSetStatus("Reiniciando la partida Dual…");
+      dualUpdateRestartButton();
+      dualRestartArmTimeout();
+      dualDoRestartRecreate();
+    }
+    function dualRequestRestart() {
+      if (!dual || !dualRunning || !dualWithConn || !dualStarted || dualRestarting) return;
+      if (mpRole === "host") mpSendAll({ t: "dual-restart" });
+      else mpSend({ t: "dual-restart" });
+      dualRestartBegin();
+    }
+    // ---------- Aviso de pestaña en segundo plano (modo Dual) ----------
+    // Con dos jugadores en el mismo Chrome, solo la pestaña al frente
+    // recibe el teclado: el otro juego se queda quieto sin saberse por
+    // qué. Cada lado avisa al otro cuando su pestaña se oculta o vuelve.
+    var dualTabHidden = {};
+    function dualRenderTabWarn() {
+      var el = $("dual-tab-warn");
+      if (!el) return;
+      var players = Object.keys(dualTabHidden).map(function (p) { return +p + 1; }).sort(function (a, b) { return a - b; });
+      if (players.length === 0) { el.hidden = true; el.textContent = ""; return; }
+      var who = players.length === 1
+        ? ("El jugador " + players[0])
+        : ("Los jugadores " + players.slice(0, -1).join(", ") + " y " + players[players.length - 1]);
+      el.textContent = who + (players.length === 1 ? " tiene" : " tienen") +
+        " la pestaña en segundo plano: sus teclas no llegan al juego. Pon su pestaña al frente para que pueda jugar.";
+      el.hidden = false;
+    }
+    function dualSendTabState() {
+      if (!dualMode || !dualWithConn || !dual) return;
+      var msg = { t: "dual-tab", hidden: document.hidden, player: dualLocalIndex };
+      if (mpRole === "host") mpSendAll(msg); else mpSend(msg);
+    }
+    function dualClearTabWarn() {
+      dualTabHidden = {};
+      dualRenderTabWarn();
     }
     // Figuras del lateral (pantallas de los demás jugadores): cada una
     // lleva en dataset.player el jugador que muestra (o nada si sobra).
@@ -3125,6 +3296,7 @@
     // local (modo humo), para que no quede ningún juego colgado.
     function dualStopForRoomChange() {
       dualStarted = false;
+      dualClearTabWarn();
       dualUpdateStartButton();
       if (!dual || !dualWithConn) { dualUpdateRoomButtons(); return; }
       try { dual.leave(); } catch (e) {}
@@ -3135,6 +3307,9 @@
     }
     function dualExitToIdle() {
       dualStarted = false;
+      dualClearTabWarn();
+      if (dualRestartTimer) { clearTimeout(dualRestartTimer); dualRestartTimer = null; }
+      dualRestarting = false;
       if (dual) { try { dual.leave(); } catch (e) {} dual = null; }
       dualWithConn = false; dualRunning = false;
       dualRomBytes = null; dualRomHash = null;
@@ -3169,6 +3344,7 @@
       // la sala, así que el orden es juego primero, sala después.
       var blocked = !dualRunning;
       if (hint) hint.hidden = !blocked || !!mpRole;
+      dualUpdateRestartButton();
       if (!mpRole) {
         $("mp-create").disabled = blocked;
         $("mp-join").disabled = blocked;
@@ -3230,6 +3406,7 @@
       if (!dual) return;
       if (dualPausedUi) dual.resume(); else dual.pause();
     });
+    $("dual-restart-btn").addEventListener("click", function () { dualRequestRestart(); });
     $("dual-resync-btn").addEventListener("click", function () {
       if (!dual) return;
       dualSetStatus("Resincronizando…");
