@@ -117,7 +117,15 @@ class DualPlayer {
     this.isHost = false;
     this.playerCount = 2;
     this.localIndex = 0;
-    this.conn = null;                            // PeerJS DataConnection (ya abierta)
+    this.conn = null;                            // PeerJS DataConnection (ya abierta; compat: primera de conns)
+    this.conns = [];                             // todas las DataConnections (anfitrión: 1 por invitado; invitado: 1 al anfitrión)
+    this.guestConns = null;                      // anfitrión: [{conn, seat}] (seat 1..playerCount-1)
+    this.seatByConn = new Map();                 // conn -> asiento del otro lado
+    this.readySeats = new Set();                 // asientos que ya mandaron dual-ready (anfitrión)
+    this.resyncReadySeats = new Set();           // asientos que ya mandaron resync-ready (anfitrión)
+    this.peerHashesBySeat = new Map();           // anfitrión: seat -> Map(frame -> hashes)
+    this._closeHandlers = new Map();             // conn -> manejador de cierre (para quitarlo en stop())
+    this.leaveTimers = new Map();                // seat -> temporizador de gracia tras cierre
     this.romHash = null;
     this.frame = 0;
     this.localKeys = 0;                          // máscara de teclas del jugador local (teclado | tacto)
@@ -133,7 +141,8 @@ class DualPlayer {
     this.pendingTicks = new Map();               // frame -> tick (invitado, desorden)
     this.rafId = 0;
     this.lastTickAt = 0;
-    this.leaveTimer = 0;
+    this._started = false;                       // el anfitrión ya mandó dual-start (solo una vez)
+    this._backpressured = false;                 // el host está frenado esperando acks (ver _loop)
     this.paused = false;
     this.desynced = false;
     this.resync = null;                          // estado de resincronización (host)
@@ -159,7 +168,19 @@ class DualPlayer {
     opts = opts || {};
     this.playerCount = opts.playerCount || 2;
     this.isHost = !!opts.isHost;
-    this.conn = opts.conn || null;
+    // Conexiones: el anfitrión pasa guestConns [{conn, seat}] (1 por
+    // invitado); el invitado pasa conn (una sola, al anfitrión). Por
+    // compatibilidad, conn solo también vale (se envuelve en lista).
+    this.guestConns = opts.guestConns || null;
+    this.conns = this.guestConns ? this.guestConns.map((g) => g.conn)
+      : (opts.conn ? [opts.conn] : []);
+    this.conn = this.conns[0] || null;
+    this.seatByConn = new Map((this.guestConns || []).map((g) => [g.conn, g.seat]));
+    this.readySeats = new Set();
+    this.resyncReadySeats = new Set();
+    this.peerHashesBySeat = new Map();
+    this._closeHandlers = new Map();
+    this.leaveTimers = new Map();
     this.romHash = opts.romHash || null;
     this.localIndex = opts.localPlayerIndex !== null && opts.localPlayerIndex !== undefined
       ? opts.localPlayerIndex : (this.isHost ? 0 : 1);
@@ -179,6 +200,8 @@ class DualPlayer {
     this.pendingTicks.clear();
     this.paused = false;
     this.desynced = false;
+    this._started = false;
+    this._backpressured = false;
     this.resync = null;
     this.resyncIn = null;
     this.departed.clear();
@@ -188,26 +211,36 @@ class DualPlayer {
     this._attachInput();
     if (this.audioEnabled) this._initAudio();
 
-    if (this.conn) {
-      this.conn.on('data', this._onConnData);
-      this.conn.on('close', this._onConnClose);
+    if (this.conns.length > 0) {
+      for (const c of this.conns) {
+        c.on('data', this._onConnData);
+        // El cierre necesita saber QUÉ conexión se cerró (para detach
+        // solo ese asiento): un manejador por conexión.
+        const onClose = () => this._onConnClose(c);
+        this._closeHandlers.set(c, onClose);
+        c.on('close', onClose);
+      }
     }
     this.ready = true;
     this.running = true;
 
-    if (!this.conn) {
+    if (this.conns.length === 0) {
       // Modo humo (sin invitado): el juego corre local, sin backpressure.
       this._emit('waiting', { message: 'Modo Dual sin invitado — el juego corre local (P1 sin entrada).' });
       this._loop();
       return true;
     }
     if (this.isHost) {
-      this._emit('waiting', { message: 'Esperando al otro jugador…' });
+      this._emit('waiting', { message: 'Esperando a los jugadores…' });
       if (!opts.waitForStart) this.beginHandshake();
-      // Con waitForStart, el bucle arranca al recibir 'dual-ready'
-      // (la página llama a beginHandshake() desde #mp-start).
+      // Con waitForStart, el bucle arranca al recibir 'dual-ready' de
+      // TODOS los invitados (la página llama a beginHandshake() desde
+      // #mp-start).
     } else {
       this._emit('waiting', { message: 'Esperando a que el host inicie…' });
+      // sendReady: el invitado se recreó tras un dual-hello con otro
+      // playerCount/asiento y debe avisar al host de que ya está listo.
+      if (opts.sendReady) this._send({ dual: true, kind: 'dual-ready', player: this.localIndex, romHash: this.romHash });
       this._guestLoop();
     }
     return true;
@@ -217,13 +250,17 @@ class DualPlayer {
     this.running = false;
     this.ready = false;
     if (typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(this.rafId);
-    clearTimeout(this.leaveTimer);
+    for (const t of this.leaveTimers.values()) clearTimeout(t);
+    this.leaveTimers.clear();
+    this._started = false;
     this._detachInput();
     this._stopAudio();
-    if (this.conn) {
-      try { this.conn.off('data', this._onConnData); } catch (e) { /* noop */ }
-      try { this.conn.off('close', this._onConnClose); } catch (e) { /* noop */ }
+    for (const c of this.conns) {
+      try { c.off('data', this._onConnData); } catch (e) { /* noop */ }
+      const onClose = this._closeHandlers.get(c);
+      if (onClose) { try { c.off('close', onClose); } catch (e) { /* noop */ } }
     }
+    this._closeHandlers.clear();
     if (this.Module) { try { this.ccall('mgs_quit', null, [], []); } catch (e) { /* ya parado */ } }
     this.Module = null;
     this._emit('stopped', {});
@@ -282,10 +319,22 @@ class DualPlayer {
 
   beginHandshake() {
     // Solo el host, y solo cuando la página lo pide (botón #mp-start).
-    if (!this.isHost || !this.conn || !this.ready) return false;
-    this._send({ dual: true, kind: 'dual-hello', version: DUAL_PROTOCOL_VERSION,
-      playerCount: this.playerCount, romHash: this.romHash,
-      saveHashes: new Array(this.playerCount).fill(null), seed: 0 });
+    // Un dual-hello por invitado, cada uno con SU asiento (el libre más
+    // bajo de 1..playerCount-1, asignado por la página al entrar a la
+    // sala). El host arranca solo cuando TODOS los invitados conectados
+    // manden su dual-ready (ver _onConnData 'dual-ready').
+    if (!this.isHost || this.conns.length === 0 || !this.ready) return false;
+    this.readySeats = new Set();
+    for (const c of this.conns) {
+      if (!c.open) continue;
+      const seat = this.seatByConn.has(c) ? this.seatByConn.get(c) : 1;
+      if (this.departed.has(seat)) continue;
+      try {
+        c.send({ dual: true, kind: 'dual-hello', version: DUAL_PROTOCOL_VERSION,
+          playerCount: this.playerCount, seat, romHash: this.romHash,
+          saveHashes: new Array(this.playerCount).fill(null), seed: 0 });
+      } catch (e) { /* enlace caído */ }
+    }
     this._emit('waiting', { message: 'Enviando invitación Dual…' });
     return true;
   }
@@ -314,16 +363,29 @@ class DualPlayer {
     // cuadros por delante del ack más bajo. Los jugadores que salieron
     // no cuentan: si no, el host se quedaría esperando acks que nunca
     // llegan y la partida se congelaría tras una salida.
-    if (this.conn) {
+    if (this.conns.length > 0) {
       const remoteAcks = this.acks.slice(1).filter((_, i) => !this.departed.has(i + 1));
       if (remoteAcks.length > 0) {
         const minAck = Math.min(...remoteAcks);
         if (this.frame - minAck > MAX_AHEAD_FRAMES) {
-          this._emit('waiting', { message: 'Esperando al otro jugador…' });
+          // Solo avisar al entrar en backpressure (una vez): antes se
+          // emitía 'waiting' en CADA cuadro frenado y el status de la
+          // página se quedaba en «Esperando a los jugadores…» aunque la
+          // partida siguiera corriendo, porque nada lo restauraba.
+          if (!this._backpressured) {
+            this._backpressured = true;
+            this._emit('waiting', { message: 'Esperando a los jugadores…' });
+          }
           this.rafId = requestAnimationFrame(() => this._loop());
           return;
         }
       }
+    }
+    // Al salir del freno, restaurar el status: 'resumed' pone en la
+    // página «Partida Dual en curso.» (misma rama que reanudar la pausa).
+    if (this._backpressured) {
+      this._backpressured = false;
+      this._emit('resumed', { message: 'Partida Dual en curso.' });
     }
     const keys = this._collectKeysForFrame(this.frame);
     this._runFrame(keys);
@@ -338,7 +400,7 @@ class DualPlayer {
     // especulativa). Este rAF drena audio y vigila que lleguen ticks.
     if (!this.running) return;
     if (this.paused) { this.rafId = requestAnimationFrame(() => this._guestLoop()); return; }
-    if (Date.now() - this.lastTickAt > 2000 && this.frame > 0 && this.conn) {
+    if (Date.now() - this.lastTickAt > 2000 && this.frame > 0 && this.conns.length > 0) {
       this._emit('waiting', { message: 'Sin ticks del host… revisa la conexión.' });
       this.lastTickAt = Date.now(); // no spamear el aviso
     }
@@ -364,12 +426,12 @@ class DualPlayer {
         // Sin conexión (modo humo) no hay entradas remotas que esperar:
         // se reutiliza la última conocida (0) sin pausar. Con conexión sí
         // se pausa tras LATE_INPUT_LIMIT cuadros seguidos sin entrada.
-        if (this.conn && frame > 10) {
+        if (this.conns.length > 0 && frame > 10) {
           this.lateInputs++;
           if (this.lateInputs >= LATE_INPUT_LIMIT) {
             this.paused = true;
             this.pauseReason = 'late-input';
-            this._emit('waiting', { message: 'Esperando la entrada del otro jugador…' });
+            this._emit('waiting', { message: 'Esperando la entrada de los jugadores…' });
             this.lateInputs = 0;
           }
         }
@@ -401,7 +463,7 @@ class DualPlayer {
         for (let p = 1; p < this.playerCount; p++) hashes.push(this._stateHash(p));
       }
       this.localHashes.set(n, hashes);
-      this._send({ dual: true, kind: 'hash', frame: n, hashes });
+      this._send({ dual: true, kind: 'hash', frame: n, player: this.localIndex, hashes });
       this._checkHash(n);
     }
   }
@@ -410,9 +472,20 @@ class DualPlayer {
     return this.ccall('mgs_state_hash', 'number', ['number'], [player]) >>> 0;
   }
 
-  _checkHash(frame) {
+  // Con varios invitados, cada uno manda sus hashes con su asiento:
+  // el anfitrión los guarda por asiento y compara contra cada uno por
+  // separado (un desync de un solo invitado debe detectarse y atribuirse
+  // a ese asiento). El invitado solo recibe los del anfitrión (asiento 0).
+  _checkHash(frame, seat) {
     const local = this.localHashes.get(frame);
-    const remote = this.peerHashes.get(frame);
+    let remote = null;
+    if (this.isHost) {
+      if (seat === undefined) return;
+      const bySeat = this.peerHashesBySeat.get(seat);
+      remote = bySeat ? bySeat.get(frame) : null;
+    } else {
+      remote = this.peerHashes.get(frame);
+    }
     if (!local || !remote) return;
     for (let p = 0; p < Math.min(local.length, remote.length); p++) {
       if (local[p] !== remote[p]) {
@@ -439,9 +512,9 @@ class DualPlayer {
   // ---------- resincronización (Volver a sincronizar) ----------
 
   requestResync() {
-    if (!this.conn) return false;
+    if (this.conns.length === 0) return false;
     if (this.isHost) { this._startResync(); return true; }
-    this._send({ dual: true, kind: 'resync-request' });
+    this._send({ dual: true, kind: 'resync-request', player: this.localIndex });
     this._emit('waiting', { message: 'Pidiendo resincronización al host…' });
     return true;
   }
@@ -497,13 +570,39 @@ class DualPlayer {
 
   _onResyncReady(msg) {
     if (!this.isHost || !this.resync || msg.id !== this.resync.id) return;
+    // Con varios invitados, esperar el resync-ready de TODOS los
+    // asientos activos antes de mandar resync-go (si no, uno quedaría
+    // con el estado viejo y desincronizaría al instante).
+    if (msg.player !== undefined) this.resyncReadySeats.add(msg.player);
+    const active = this._activeGuestSeats();
+    for (const s of active) {
+      if (!this.resyncReadySeats.has(s)) return;
+    }
     // Recargar los propios estados también: ambos lados quedan bit a bit
     // iguales tras el mismo load+reset (verificado en Node).
     this._loadStates(this.resync.states);
     const frame = this.resync.frame;
     this.resync = null;
+    this.resyncReadySeats = new Set();
     this._send({ dual: true, kind: 'resync-go', frame });
     this._resumeAfterResync(frame);
+  }
+
+  // Asientos de invitados con la conexión abierta y no salidos.
+  // (Si un invitado se cae en mitad de una resincronización, su
+  // resync-ready no llegará nunca: no se le espera.)
+  _activeGuestSeats() {
+    const seats = [];
+    for (const [c, seat] of this.seatByConn) {
+      if (c.open && !this.departed.has(seat)) seats.push(seat);
+    }
+    // Sin mapa de asientos (compat con conn única), caer a 1..N-1.
+    if (seats.length === 0 && this.seatByConn.size === 0) {
+      for (let s = 1; s < this.playerCount; s++) {
+        if (!this.departed.has(s)) seats.push(s);
+      }
+    }
+    return seats;
   }
 
   _resumeAfterResync(frame) {
@@ -525,7 +624,16 @@ class DualPlayer {
 
   // ---------- red (PeerJS) ----------
 
-  _send(msg) { if (this.conn && this.conn.open) { try { this.conn.send(msg); } catch (e) { /* enlace caído */ } } }
+  // Fan-out: el anfitrión manda a TODOS sus invitados; el invitado
+  // tiene una sola conexión (al anfitrión), así que es lo mismo que
+  // antes. Los mensajes que solo van al anfitrión (input, ack,
+  // dual-ready, resync-ready) los manda el invitado por su única
+  // conexión; los del anfitrión llegan a todos los invitados.
+  _send(msg) {
+    for (const c of this.conns) {
+      if (c && c.open) { try { c.send(msg); } catch (e) { /* enlace caído */ } }
+    }
+  }
 
   _onConnData(msg) {
     if (!msg || !msg.dual) return; // mensajes de la sala (hola/ping) los lleva la página
@@ -540,16 +648,39 @@ class DualPlayer {
           this._emit('error', { message: 'El ROM del host no coincide con el tuyo.' });
           break;
         }
+        // El invitado se creó con valores provisionales (playerCount 2,
+        // asiento 1). Si el saludo trae otros, la página debe recrear el
+        // jugador con esos datos (evento 'need-player'); si coinciden,
+        // se responde dual-ready directamente (caso 2P, sin recrear).
+        if (msg.playerCount !== this.playerCount ||
+            (msg.seat !== undefined && msg.seat !== this.localIndex)) {
+          this._emit('need-player', {
+            playerCount: msg.playerCount || this.playerCount,
+            seat: (msg.seat !== undefined ? msg.seat : this.localIndex),
+          });
+          break;
+        }
         this.playerCount = msg.playerCount || this.playerCount;
-        this._send({ dual: true, kind: 'dual-ready', romHash: this.romHash });
+        this._send({ dual: true, kind: 'dual-ready', player: this.localIndex, romHash: this.romHash });
         break;
       }
-      case 'dual-ready':
+      case 'dual-ready': {
         if (!this.isHost) break;
-        this._send({ dual: true, kind: 'dual-start', frame: 0 });
-        this._emit('started', { frame: 0 });
-        this._loop();
+        if (msg.player !== undefined) this.readySeats.add(msg.player);
+        // Arrancar solo cuando TODOS los invitados activos estén listos
+        // (y solo una vez: un dual-ready duplicado no debe re-arrancar
+        // el bucle ni reenviar dual-start).
+        if (this._started) break;
+        const active = this._activeGuestSeats();
+        if (active.length === 0) break;
+        if (active.every((s) => this.readySeats.has(s))) {
+          this._started = true;
+          this._send({ dual: true, kind: 'dual-start', frame: 0 });
+          this._emit('started', { frame: 0 });
+          this._loop();
+        }
         break;
+      }
       case 'dual-start':
         if (this.isHost) break;
         this.lastTickAt = Date.now();
@@ -584,12 +715,27 @@ class DualPlayer {
         }
         break;
       case 'hash': {
-        this.peerHashes.set(msg.frame, msg.hashes);
-        this._checkHash(msg.frame);
+        // El anfitrión guarda los hashes por asiento del remitente y
+        // compara contra cada invitado por separado; el invitado solo
+        // recibe los del anfitrión.
+        if (this.isHost) {
+          if (msg.player !== undefined) {
+            let bySeat = this.peerHashesBySeat.get(msg.player);
+            if (!bySeat) { bySeat = new Map(); this.peerHashesBySeat.set(msg.player, bySeat); }
+            bySeat.set(msg.frame, msg.hashes);
+            this._checkHash(msg.frame, msg.player);
+          }
+        } else {
+          this.peerHashes.set(msg.frame, msg.hashes);
+          this._checkHash(msg.frame);
+        }
         break;
       }
       case 'desync': {
         if (this.desynced) break;
+        // El anfitrión reenvía el aviso a los demás invitados para que
+        // todos paren (si no, los demás seguirían esperando ticks).
+        if (this.isHost) this._send({ dual: true, kind: 'desync', frame: msg.frame, player: msg.player, localHash: msg.localHash, remoteHash: msg.remoteHash });
         this.desynced = true;
         this.running = false;
         if (typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(this.rafId);
@@ -601,11 +747,15 @@ class DualPlayer {
         break;
       }
       case 'pause':
+        // El anfitrión reenvía la pausa a los demás invitados para que
+        // todos pausen juntos; el invitado solo pausa su lado.
+        if (this.isHost) this._send({ dual: true, kind: 'pause', player: msg.player });
         this.paused = true;
         this.pauseReason = 'remote';
         this._emit('paused', { by: msg.player });
         break;
       case 'resume':
+        if (this.isHost) this._send({ dual: true, kind: 'resume', player: msg.player });
         this.paused = false;
         this.pauseReason = null;
         this._emit('resumed', { by: msg.player });
@@ -614,6 +764,10 @@ class DualPlayer {
         const p = msg.player;
         try { this.ccall('mgs_detach_player', 'number', ['number'], [p]); } catch (e) { /* noop */ }
         this.departed.add(p);
+        // El anfitrión reenvía la salida a los demás invitados para que
+        // todos desconecten ese cable (si no, sus puentes seguirían con
+        // ese núcleo en el enlace y divergirían del anfitrión).
+        if (this.isHost) this._send({ dual: true, kind: 'leave', player: p });
         this._emit('player-left', { player: p, message: `Jugador ${p} salió — cable desconectado.` });
         break;
       }
@@ -644,7 +798,7 @@ class DualPlayer {
           try {
             this._loadStates(states);
             this.resyncIn = null;
-            this._send({ dual: true, kind: 'resync-ready', id: msg.id });
+            this._send({ dual: true, kind: 'resync-ready', id: msg.id, player: this.localIndex });
           } catch (e) {
             this._emit('error', { message: 'No se pudo cargar el estado resincronizado: ' + e.message });
           }
@@ -674,18 +828,28 @@ class DualPlayer {
     this._maybeHash(msg.frame);
   }
 
-  _onConnClose() {
+  _onConnClose(conn) {
     // Gracia de 10 s: si era un parpadeo de la conexión, el otro lado puede
-    // reconectar; si no, detach y seguir con los que quedan.
+    // reconectar; si no, detach y seguir con los que quedan. Cada
+    // conexión tiene su propio temporizador (con 3 invitados, cada uno se
+    // va por su lado). El asiento que se va: en el anfitrión, el de esa
+    // conexión; en el invitado, el 0 (el anfitrión).
     this._emit('waiting', { message: 'Jugador desconectado — esperando…' });
-    clearTimeout(this.leaveTimer);
-    this.leaveTimer = setTimeout(() => {
+    const seat = this.isHost
+      ? (this.seatByConn.has(conn) ? this.seatByConn.get(conn) : 1)
+      : 0;
+    const oldTimer = this.leaveTimers.get(seat);
+    if (oldTimer) clearTimeout(oldTimer);
+    this.leaveTimers.set(seat, setTimeout(() => {
+      this.leaveTimers.delete(seat);
       if (!this.running && !this.desynced) return;
-      const other = this.isHost ? 1 : 0;
-      try { this.ccall('mgs_detach_player', 'number', ['number'], [other]); } catch (e) { /* noop */ }
-      this.departed.add(other);
-      this._emit('player-left', { player: other, message: `Jugador ${other} se desconectó — cable desconectado.` });
-    }, LEAVE_GRACE_MS);
+      try { this.ccall('mgs_detach_player', 'number', ['number'], [seat]); } catch (e) { /* noop */ }
+      this.departed.add(seat);
+      // El anfitrión avisa a los demás invitados para que también
+      // desconecten ese cable (si no, sus puentes divergirían).
+      if (this.isHost) this._send({ dual: true, kind: 'leave', player: seat });
+      this._emit('player-left', { player: seat, message: `Jugador ${seat} se desconectó — cable desconectado.` });
+    }, LEAVE_GRACE_MS));
   }
 
   // ---------- entrada ----------
